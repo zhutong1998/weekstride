@@ -111,8 +111,13 @@ struct TaskReveal: Equatable {
 final class TaskEditingExitRequest {
     let taskID: UUID?
     var failed = false
+    private(set) var failedTaskID: UUID?
     init(taskID: UUID? = nil) { self.taskID = taskID }
     func targets(_ id: UUID) -> Bool { taskID == nil || taskID == id }
+    func fail(for id: UUID) {
+        failed = true
+        if failedTaskID == nil { failedTaskID = id }
+    }
 }
 
 enum TaskNavigation {

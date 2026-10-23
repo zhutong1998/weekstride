@@ -319,31 +319,113 @@ public final class WorkStore: ObservableObject {
               try backupAttachments.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else { throw LedgerError.invalid("备份不能包含符号链接。") }
         let next = try JSONDecoder().decode(LedgerData.self, from: Data(contentsOf: backupJSON))
         try Self.validate(next)
-        for attachment in Self.uniqueAttachments(next) {
+        let incoming = Self.uniqueAttachments(next)
+        let currentAttachments = Dictionary(uniqueKeysWithValues: Self.uniqueAttachments(data).map { ($0.storedName, $0) })
+        var damagedTargets: Set<String> = []
+        for attachment in incoming {
             let source = url.appendingPathComponent("attachments").appendingPathComponent(attachment.storedName)
             try Self.verifyAttachment(attachment, at: source)
             let target = attachmentURL(attachment)
             if files.fileExists(atPath: target.path), !files.contentsEqual(atPath: source.path, andPath: target.path) {
-                throw LedgerError.conflict("附件内容冲突，未导入：\(attachment.name)")
+                let info = try target.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard info.isRegularFile == true, info.isSymbolicLink != true,
+                      let current = currentAttachments[attachment.storedName] else {
+                    throw LedgerError.conflict("附件内容冲突，未导入：\(attachment.name)")
+                }
+                let isDamaged: Bool
+                do { try Self.verifyAttachment(current, at: target); isDamaged = false }
+                catch { isDamaged = true }
+                guard isDamaged else { throw LedgerError.conflict("附件内容冲突，未导入：\(attachment.name)") }
+                damagedTargets.insert(attachment.storedName)
             }
         }
         let backups = directory.appendingPathComponent("Backups", isDirectory: true)
         try files.createDirectory(at: backups, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try exportBackup(to: backups.appendingPathComponent("before-import-\(UUID().uuidString).workledgerbackup", isDirectory: true))
+        let backupInfo = try backups.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard backupInfo.isDirectory == true, backupInfo.isSymbolicLink != true else { throw LedgerError.invalid("安全副本目录不能是符号链接。") }
+        let safetyCopy = try importSafetyCopy(in: backups)
         var copied: [URL] = []
+        var displaced: [(original: URL, target: URL)] = []
         do {
-            for attachment in Self.uniqueAttachments(next) {
+            for attachment in incoming {
                 let target = attachmentURL(attachment)
+                if damagedTargets.contains(attachment.storedName) {
+                    let originals = safetyCopy.appendingPathComponent("replaced-originals", isDirectory: true)
+                    try files.createDirectory(at: originals, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                    let original = originals.appendingPathComponent(attachment.storedName)
+                    try files.moveItem(at: target, to: original)
+                    displaced.append((original, target))
+                }
                 if !files.fileExists(atPath: target.path) {
-                    try files.copyItem(at: url.appendingPathComponent("attachments").appendingPathComponent(attachment.storedName), to: target)
                     copied.append(target)
+                    try files.copyItem(at: url.appendingPathComponent("attachments").appendingPathComponent(attachment.storedName), to: target)
                     try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
                 }
             }
             try commit(next)
         } catch {
             for target in copied { try? files.removeItem(at: target) }
+            var rollbackFailed = false
+            for item in displaced.reversed() {
+                do { try files.moveItem(at: item.original, to: item.target) }
+                catch { rollbackFailed = true }
+            }
+            if rollbackFailed { throw LedgerError.conflict("恢复未完成，原附件保留在安全副本中，请保留数据目录并检查：\(safetyCopy.path)") }
             throw error
+        }
+    }
+
+    private func importSafetyCopy(in backups: URL) throws -> URL {
+        let id = UUID().uuidString
+        let backup = backups.appendingPathComponent("before-import-\(id).workledgerbackup", isDirectory: true)
+        do {
+            try exportBackup(to: backup)
+            return backup
+        } catch {
+            let rescue = backups.appendingPathComponent("before-import-\(id).workledgerrescue", isDirectory: true)
+            let temporary = backups.appendingPathComponent(".workledger-rescue-\(id)", isDirectory: true)
+            defer { try? files.removeItem(at: temporary) }
+            let attachments = temporary.appendingPathComponent("attachments", isDirectory: true)
+            try files.createDirectory(at: attachments, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            func write(_ bytes: Data, named name: String) throws {
+                let target = temporary.appendingPathComponent(name)
+                try bytes.write(to: target, options: .atomic)
+                try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            }
+            try write(Self.encoded(data), named: "snapshot.json")
+            var issues: [String] = []
+            do {
+                let info = try dataURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard info.isRegularFile == true, info.isSymbolicLink != true else { throw LedgerError.invalid("Original metadata is not a regular file.") }
+                try write(Data(contentsOf: dataURL), named: "original-data.json")
+            } catch { issues.append("Original metadata unavailable: \(error.localizedDescription)") }
+            for attachment in Self.uniqueAttachments(data) {
+                let source = attachmentURL(attachment)
+                do {
+                    let info = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                    guard info.isRegularFile == true, info.isSymbolicLink != true else { throw LedgerError.invalid("Not a regular file.") }
+                    if Int64(info.fileSize ?? -1) != attachment.size { issues.append("Attachment size mismatch: \(attachment.storedName)") }
+                    let target = attachments.appendingPathComponent(attachment.storedName)
+                    try files.copyItem(at: source, to: target)
+                    try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                } catch { issues.append("Attachment unavailable: \(attachment.storedName): \(error.localizedDescription)") }
+            }
+            let manifest: [String: Any] = ["format": "weekstride-rescue-v1", "completeBackup": false,
+                                           "reason": error.localizedDescription, "issues": issues]
+            try write(JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]), named: "manifest.json")
+            let readme = """
+            WeekStride pre-restore rescue copy — NOT a complete, normally restorable backup.
+
+            The current data could not be exported as a valid backup. This rescue copy preserves
+            the in-memory ledger (snapshot.json), readable original metadata (original-data.json),
+            and readable attachment bytes. See manifest.json for missing or damaged files.
+            Replaced original files, if any, are retained under replaced-originals.
+            Do not rename these files to data.json or import this folder as a normal backup.
+            Keep this folder for manual recovery; use a valid .workledgerbackup for restoration.
+            """
+            try write(Data(readme.utf8), named: "README.txt")
+            try files.moveItem(at: temporary, to: rescue)
+            return rescue
         }
     }
 
@@ -482,6 +564,7 @@ public final class WorkStore: ObservableObject {
         let taskIDs = Set(ledger.tasks.map(\.id))
         var subtaskIDs: Set<UUID> = []
         var attachmentsByName: [String: Attachment] = [:]
+        var successors: [UUID: UUID] = [:]
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!
         for project in ledger.projects {
             guard !project.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("项目名称不能为空。") }
@@ -505,6 +588,7 @@ public final class WorkStore: ObservableObject {
             }
             if let nextID = task.nextTaskID {
                 guard task.completedAt != nil, nextID != task.id, taskIDs.contains(nextID) else { throw LedgerError.invalid("循环任务关联无效。") }
+                successors[task.id] = nextID
             }
             for subtask in task.subtasks {
                 guard subtaskIDs.insert(subtask.id).inserted, !subtask.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("子任务 ID 重复或标题为空。") }
@@ -522,6 +606,16 @@ public final class WorkStore: ObservableObject {
                 if let existing = attachmentsByName[attachment.storedName], existing != attachment { throw LedgerError.invalid("附件记录冲突。") }
                 attachmentsByName[attachment.storedName] = attachment
             }
+        }
+        var checked: Set<UUID> = []
+        for id in successors.keys where !checked.contains(id) {
+            var path: Set<UUID> = []
+            var current: UUID? = id
+            while let id = current, !checked.contains(id) {
+                guard path.insert(id).inserted else { throw LedgerError.invalid("循环任务关联无效。") }
+                current = successors[id]
+            }
+            checked.formUnion(path)
         }
     }
 }

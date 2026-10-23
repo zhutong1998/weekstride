@@ -36,7 +36,7 @@
 "两秒后发送一条测试通知，用于检查提醒是否正常" = "Send a notification in two seconds to check reminders";
 "个月" = "months";
 "仅允许本机连接，必须提供 Bearer 令牌。关闭后停止接受请求；App 退出后接口也会停止。" = "Only local connections with a Bearer token are accepted. Turning off or quitting the app stops the API.";
-"仅允许本机连接，必须提供 Bearer 令牌。完全退出应用后，接口停止服务。" = "Only local connections with a Bearer token are accepted. Quitting the app stops the API.";
+"仅允许本机连接，必须提供 Bearer 令牌。完全退出应用后，接口停止服务。" = "Local connections only. The usage guide is public; all data operations require a Bearer token. Quitting the app stops the API.";
 "仅本地保存" = "Stored locally";
 "仅标题" = "Titles only";
 "仅移除此任务的引用，文件保留；可在底部撤销或按 ⌘Z 恢复" = "Remove only this task's reference; the file is retained. Undo below or with ⌘Z.";
@@ -72,6 +72,7 @@
 "任务附件 ID 重复。" = "The task has duplicate attachment IDs.";
 "使用设置中的默认显示方式" = "Use the defaults from Settings";
 "使用说明" = "Usage";
+"打开本地使用说明" = "Open local API guide";
 "使用默认应用打开附件" = "Open the attachment in its default app";
 "保存并添加下一步骤" = "Save and add next step";
 "保存当前任务" = "Save current task";
@@ -564,3 +565,8 @@
 "，Shift＋回车下一个步骤" = ", Shift+Return adds the next step";
 "；回车保存任务" = "; Return saves the task";
 "；回车保存任务，Shift＋回车换行" = "; Return saves the task, Shift+Return adds a line";
+"显示菜单栏图标" = "Show menu bar icon";
+"隐藏菜单栏图标" = "Hide menu bar icon";
+"本周待办 %lld 项" = "This week · %lld unfinished tasks";
+"本周没有待办任务" = "No unfinished tasks this week";
+"菜单栏显示本周待办任务。隐藏图标后，仍可从 Dock 打开应用并在此重新开启。" = "The menu bar shows unfinished work for this week. After hiding the icon, reopen the app from the Dock and enable it again here.";

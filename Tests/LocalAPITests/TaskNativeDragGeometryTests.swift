@@ -5,6 +5,33 @@ import XCTest
 @testable import WorkLedger
 
 final class TaskNativeDragGeometryTests: XCTestCase {
+    @MainActor func testNativeListContainersAllowCardDragButTheirEditingControlsBlockIt() {
+        let lists: [NSTableView] = [NSTableView(), NSOutlineView()]
+        for list in lists {
+            let card = NSView(), content = NSView()
+            list.addSubview(card)
+            card.addSubview(content)
+            XCTAssertFalse(TaskNativeDragSource.ProbeView.blocksCardDrag(from: list))
+            XCTAssertFalse(TaskNativeDragSource.ProbeView.blocksCardDrag(from: content),
+                           "A task card inside a native list must remain draggable.")
+
+            let controls: [NSControl] = [NSButton(), NSTextField(), NSSlider(), NSControl(frame: .zero)]
+            for control in controls {
+                let child = NSView()
+                card.addSubview(control)
+                control.addSubview(child)
+                XCTAssertTrue(TaskNativeDragSource.ProbeView.blocksCardDrag(from: control))
+                XCTAssertTrue(TaskNativeDragSource.ProbeView.blocksCardDrag(from: child),
+                              "The list exception must not allow dragging from a real control's content.")
+            }
+            let editor = NSTextView(frame: .zero)
+            card.addSubview(editor)
+            XCTAssertTrue(TaskNativeDragSource.ProbeView.blocksCardDrag(from: editor))
+        }
+        XCTAssertFalse(TaskNativeDragSource.ProbeView.blocksCardDrag(from: NSView()))
+        XCTAssertFalse(TaskNativeDragSource.ProbeView.blocksCardDrag(from: nil))
+    }
+
     @MainActor func testLazyStackDragSourcesKeepTheirOwnTask() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)

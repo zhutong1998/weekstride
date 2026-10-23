@@ -65,6 +65,32 @@ private struct InlineTextChangedPreference: PreferenceKey {
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
 
+private struct TaskAccessibilityFocusModifier<Value: Hashable>: ViewModifier {
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControlEnabled
+    let binding: AccessibilityFocusState<Value>.Binding
+    let value: Value
+
+    @ViewBuilder func body(content: Content) -> some View {
+        // Native accessibility stays available; only track assistive focus while it can be used.
+        if voiceOverEnabled || switchControlEnabled {
+            content.accessibilityFocused(binding, equals: value)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func taskAccessibilityFocused<Value: Hashable>(_ binding: AccessibilityFocusState<Value>.Binding, equals value: Value) -> some View {
+        modifier(TaskAccessibilityFocusModifier(binding: binding, value: value))
+    }
+
+    func taskAccessibilityFocused(_ binding: AccessibilityFocusState<Bool>.Binding) -> some View {
+        taskAccessibilityFocused(binding, equals: true)
+    }
+}
+
 extension WorkTask {
     var isEmptyDraft: Bool {
         // Project and planning week are filled automatically, so they do not keep an empty draft alive.
@@ -306,7 +332,7 @@ struct TaskPlanPicker: View {
                 .overlay(Capsule().stroke(selected ? Color.accentColor.opacity(0.3) : .clear, lineWidth: 1))
         }
         .buttonStyle(HoverHighlightButtonStyle(cornerRadius: 100))
-        .focused($focusedChoice, equals: title).accessibilityFocused($voiceOverChoice, equals: title)
+        .focused($focusedChoice, equals: title).taskAccessibilityFocused($voiceOverChoice, equals: title)
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -322,179 +348,93 @@ struct TaskPlanPicker: View {
 struct InlineEditableText: View {
     @Environment(\.taskHoverEnabled) private var taskHoverEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appTextScale) private var textScale
-    let text: String
-    let placeholder: String
-    let help: String
-    var multiline = false
-    var required = false
-    var font: AppFontStyle = .body
-    var showsHoverBackground = true
-    var taskID: UUID?
-    var saveOnBlur = false
-    var allowEmpty = false
-    var avoidsInitialSelection = false
-    var onEmptySave: (() throws -> Void)?
-    var onNextStep: (() -> Void)?
-    var onEditingChanged: (Bool) -> Void = { _ in }
-    var onDraftChange: (String) -> Void = { _ in }
-    let onSave: (String) throws -> Void
-    var onFailure: (String) -> Void = { _ in }
-    @State private var draft: String
-    @State private var lastSaved: String
-    @State private var originalText: String
-    @State private var editing = false
-    @State private var autofocusRequested = false
+    @Environment(\.taskCardEditingState) private var editingOwner
+    struct Input {
+        let text: String
+        let placeholder: String
+        let help: String
+        let multiline: Bool
+        let required: Bool
+        let font: AppFontStyle
+        let showsHoverBackground: Bool
+        let taskID: UUID?
+        let sessionID: String?
+        let saveOnBlur: Bool
+        let allowEmpty: Bool
+        let avoidsInitialSelection: Bool
+        let onEmptySave: (() throws -> Void)?
+        let onNextStep: (() -> Void)?
+        let onEditingChanged: (Bool) -> Void
+        let onDraftChange: (String) -> Void
+        let onSave: (String) throws -> Void
+        let onFailure: (String) -> Void
+    }
+    private let input: Input
+    @State private var localSession: InlineTextEditingState?
     @State private var hovering = false
-    @State private var error: String?
-    @State private var pendingSave: Task<Void, Never>?
-    @State private var discarded = false
-    @State private var hintVisible = false
-    @FocusState private var focused: Bool
 
-    init(text: String, placeholder: String, help: String, multiline: Bool = false, required: Bool = false, font: AppFontStyle = .body, showsHoverBackground: Bool = true, taskID: UUID? = nil, saveOnBlur: Bool = false, initiallyEditing: Bool = false, autofocus: Bool = false, allowEmpty: Bool = false, avoidsInitialSelection: Bool = false, onEmptySave: (() throws -> Void)? = nil, onNextStep: (() -> Void)? = nil, onEditingChanged: @escaping (Bool) -> Void = { _ in }, onDraftChange: @escaping (String) -> Void = { _ in }, onSave: @escaping (String) throws -> Void, onFailure: @escaping (String) -> Void = { _ in }) {
-        self.text = text; self.placeholder = placeholder; self.help = help
-        self.multiline = multiline; self.required = required; self.font = font; self.taskID = taskID
-        self.showsHoverBackground = showsHoverBackground
-        self.saveOnBlur = saveOnBlur; self.allowEmpty = allowEmpty; self.onEditingChanged = onEditingChanged
-        self.avoidsInitialSelection = avoidsInitialSelection; self.onNextStep = onNextStep
-        self.onEmptySave = onEmptySave
-        self.onDraftChange = onDraftChange; self.onSave = onSave; self.onFailure = onFailure
-        _draft = State(initialValue: text); _lastSaved = State(initialValue: text); _originalText = State(initialValue: text)
-        _editing = State(initialValue: initiallyEditing)
-        _autofocusRequested = State(initialValue: initiallyEditing && autofocus)
+    init(text: String, placeholder: String, help: String, multiline: Bool = false, required: Bool = false, font: AppFontStyle = .body, showsHoverBackground: Bool = true, taskID: UUID? = nil, sessionID: String? = nil, saveOnBlur: Bool = false, initiallyEditing: Bool = false, autofocus: Bool = false, allowEmpty: Bool = false, avoidsInitialSelection: Bool = false, onEmptySave: (() throws -> Void)? = nil, onNextStep: (() -> Void)? = nil, onEditingChanged: @escaping (Bool) -> Void = { _ in }, onDraftChange: @escaping (String) -> Void = { _ in }, onSave: @escaping (String) throws -> Void, onFailure: @escaping (String) -> Void = { _ in }) {
+        input = Input(text: text, placeholder: placeholder, help: help, multiline: multiline, required: required,
+                      font: font, showsHoverBackground: showsHoverBackground, taskID: taskID, sessionID: sessionID, saveOnBlur: saveOnBlur,
+                      allowEmpty: allowEmpty, avoidsInitialSelection: avoidsInitialSelection, onEmptySave: onEmptySave,
+                      onNextStep: onNextStep, onEditingChanged: onEditingChanged, onDraftChange: onDraftChange,
+                      onSave: onSave, onFailure: onFailure)
+        _localSession = State(initialValue: initiallyEditing ? InlineTextEditingState(input: input, autofocus: autofocus) : nil)
+    }
+
+    private var session: InlineTextEditingState? {
+        let value = input.sessionID.flatMap { editingOwner?.fields[$0] } ?? localSession
+        return value?.active == true ? value : nil
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Group {
-                if editing {
-                    editor
-                        .padding(.horizontal, 7).padding(.vertical, 5)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(error == nil ? (focused ? Color.accentColor.opacity(0.5) : .clear) : .red.opacity(0.6)))
-                } else {
-                    Button {
-                        withAnimation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.18)) {
-                            draft = text; lastSaved = text; originalText = text; autofocusRequested = true; editing = true
-                        }
-                    } label: {
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(text.isEmpty ? placeholder : text)
-                                .foregroundStyle(text.isEmpty ? Color.secondary : .primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Image(systemName: "pencil").appFont(.caption).foregroundStyle(.secondary)
-                                .opacity(taskHoverEnabled && hovering ? 1 : 0).padding(.top, 3)
+        Group {
+            if let session {
+                InlineTextEditorSession(state: session, input: input)
+            } else {
+                Button {
+                    withAnimation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.18)) {
+                        let value = InlineTextEditingState(input: input, autofocus: true)
+                        localSession = value
+                        retain(value)
+                        input.onEditingChanged(true)
+                    }
+                } label: {
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(input.text.isEmpty ? input.placeholder : input.text)
+                            .foregroundStyle(input.text.isEmpty ? Color.secondary : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Image(systemName: "pencil").appFont(.caption).foregroundStyle(.secondary)
+                            .opacity(taskHoverEnabled && hovering ? 1 : 0).padding(.top, 3)
+                            .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
+                    }.padding(.horizontal, 7).padding(.vertical, 5)
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                        .background {
+                            RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(taskHoverEnabled && hovering && input.showsHoverBackground ? 0.045 : 0))
                                 .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
-                        }.padding(.horizontal, 7).padding(.vertical, 5)
-                            .contentShape(RoundedRectangle(cornerRadius: 6))
-                            .background {
-                                RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(taskHoverEnabled && hovering && showsHoverBackground ? 0.045 : 0))
-                                    .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
-                            }
-                    }.buttonStyle(.plain).help(help).accessibilityLabel(help)
-                }
-            }.appFont(font)
-            if editing && hintVisible {
-                Text(inputHint).appFont(.system(size: 10)).foregroundStyle(.tertiary)
-                    .frame(height: 12 * textScale)
-                    .padding(.horizontal, 7).allowsHitTesting(false)
-                    .transition(reduceMotion ? .identity : .taskSection)
+                        }
+                }.buttonStyle(.plain).help(input.help).accessibilityLabel(input.help)
             }
-            if let error { Text(error).appFont(.caption).foregroundStyle(.red).padding(.horizontal, 7) }
         }
-        .alignmentGuide(VerticalAlignment.center) { dimensions in
-            (dimensions.height - (editing && hintVisible ? 12 * textScale + 4 : 0)) / 2
-        }
+        .appFont(input.font)
         .onHover { hovering = taskHoverEnabled && $0 }
         .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovering = false } }
-        .onAppear { onEditingChanged(editing) }
-        .task(id: editing) {
-            guard editing, autofocusRequested else { return }
-            await Task.yield()
-            guard !Task.isCancelled, editing, autofocusRequested, !discarded else { return }
-            focused = true; autofocusRequested = false
-        }
-        .onChange(of: editing) { _, value in onEditingChanged(value) }
-        .preference(key: InlineEditingPreference.self, value: focused)
-        .preference(key: InlineEditorOpenPreference.self, value: editing)
-        .preference(key: InlineTextChangedPreference.self, value: editing && textHasChanged)
-        .onChange(of: draft) { _, _ in
-            guard editing, !discarded else { return }
-            onDraftChange(draft)
-            pendingSave?.cancel()
-            guard !saveOnBlur else { return }
-            pendingSave = Task { @MainActor in
-                do { try await Task.sleep(for: .milliseconds(250)) }
-                catch { return }
-                guard !Task.isCancelled else { return }
-                _ = flush()
-            }
-        }
-        .onChange(of: focused) { _, value in
-            withAnimation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.18)) { hintVisible = value }
-            if !value && editing { _ = flush() }
-        }
-        .onChange(of: text) { _, value in
-            if !editing { draft = value; lastSaved = value; originalText = value }
-        }
-        .background {
-            if editing {
-                TaskEditingBoundary(enabled: true, onSubmit: focused ? finishEditing : nil,
-                                    onNextStep: focused && onNextStep != nil ? advanceStep : nil,
-                                    avoidInitialSelection: avoidsInitialSelection && focused, onFlush: { request in
-                    guard request.taskID == taskID else { return }
-                    if request.resignFocus { autofocusRequested = false; focused = false }
-                    if !flush(commitEmpty: request.finishEditing) { request.failed = true }
-                    else if request.finishEditing { editing = false; focused = false; draft = lastSaved }
-                }, onDiscard: { id in
-                    guard id == taskID else { return }
-                    discarded = true; pendingSave?.cancel()
-                })
-            }
-        }
-        .onDisappear {
-            pendingSave?.cancel()
-            guard !discarded else { return }
-            if !flush(), let error { onFailure(error) }
+        .onAppear {
+            if let session {
+                localSession = session
+                session.updateInput(input)
+                retain(session)
+                input.onEditingChanged(true)
+            } else { input.onEditingChanged(false) }
         }
     }
 
-    private var textHasChanged: Bool {
-        if required {
-            return draft.trimmingCharacters(in: .whitespacesAndNewlines) != originalText.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return draft != originalText
-    }
-
-    private var inputHint: String {
-        if onNextStep != nil { return L("↩ 保存任务 · ⇧↩ 下一个步骤") }
-        return multiline ? L("↩ 保存任务 · ⇧↩ 换行") : L("↩ 保存任务")
-    }
-
-    private func advanceStep() {
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, flush() else { return }
-        onNextStep?()
-    }
-
-    @ViewBuilder private var editor: some View {
-        if multiline {
-            TextEditor(text: $draft)
-                .scrollContentBackground(.hidden).focused($focused)
-                .frame(height: max(64 * textScale, min(160 * textScale, (CGFloat(draft.components(separatedBy: "\n").count) * 18 + 12) * textScale)))
-                .overlay(alignment: .topLeading) {
-                    if draft.isEmpty {
-                        Text(placeholder).foregroundStyle(.tertiary).padding(.horizontal, 5).padding(.vertical, 1).allowsHitTesting(false)
-                    }
-                }
-                .help(help + L("；回车保存任务，Shift＋回车换行"))
-                .accessibilityLabel(help)
-                .onExitCommand { finishEditing() }
-        } else {
-            TextField(placeholder, text: $draft)
-                .textFieldStyle(.plain).focused($focused)
-                .help(help + L("；回车保存任务") + (onNextStep == nil ? "" : L("，Shift＋回车下一个步骤"))).accessibilityLabel(help)
-                .onExitCommand { finishEditing() }
+    private func retain(_ session: InlineTextEditingState) {
+        guard let key = input.sessionID, let owner = editingOwner else { return }
+        owner.fields[key] = session
+        session.onClose = { [weak owner, weak session] in
+            if owner?.fields[key] === session { owner?.fields.removeValue(forKey: key) }
         }
     }
 
@@ -506,32 +446,191 @@ struct InlineEditableText: View {
         }
         return value
     }
+}
 
-    @discardableResult private func flush(commitEmpty: Bool = false) -> Bool {
-        pendingSave?.cancel()
+@Observable @MainActor
+final class InlineTextEditingState {
+    @ObservationIgnored private(set) var input: InlineEditableText.Input
+    @ObservationIgnored var onClose: (() -> Void)?
+    @ObservationIgnored private var pendingSave: Task<Void, Never>?
+    var draft: String
+    private(set) var lastSaved: String
+    let originalText: String
+    private(set) var active = true
+    private(set) var discarded = false
+    var autofocusRequested: Bool
+    private(set) var error: String?
+    private var emptyRemovalCommitted = false
+
+    init(input: InlineEditableText.Input, autofocus: Bool = false) {
+        self.input = input
+        draft = input.text; lastSaved = input.text; originalText = input.text
+        autofocusRequested = autofocus
+    }
+
+    // Refresh command closures without publishing or replacing the retained editor state.
+    func updateInput(_ input: InlineEditableText.Input) { self.input = input }
+
+    var textHasChanged: Bool {
+        if input.required {
+            return draft.trimmingCharacters(in: .whitespacesAndNewlines) != originalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return draft != originalText
+    }
+
+    func draftChanged() {
+        guard active, !discarded else { return }
+        input.onDraftChange(draft)
+        cancelAutosave()
+        guard !input.saveOnBlur else { return }
+        pendingSave = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) }
+            catch { return }
+            guard !Task.isCancelled, let self else { return }
+            _ = self.flush()
+        }
+    }
+
+    func cancelAutosave() { pendingSave?.cancel(); pendingSave = nil }
+
+    @discardableResult func flush(commitEmpty: Bool = false) -> Bool {
+        cancelAutosave()
         guard !discarded else { return true }
         do {
-            guard let value = try Self.valueToSave(draft, required: required, allowEmpty: allowEmpty, removesWhenEmpty: onEmptySave != nil, commitEmpty: commitEmpty) else { return true }
-            if required && value.isEmpty {
-                if let onEmptySave { try onEmptySave() }
-                else { onDraftChange(draft) }
+            guard let value = try InlineEditableText.valueToSave(draft, required: input.required, allowEmpty: input.allowEmpty, removesWhenEmpty: input.onEmptySave != nil, commitEmpty: commitEmpty) else { return true }
+            if input.required && value.isEmpty {
+                if let onEmptySave = input.onEmptySave {
+                    if !emptyRemovalCommitted { try onEmptySave(); emptyRemovalCommitted = true }
+                } else { input.onDraftChange(draft) }
                 lastSaved = value; error = nil; return true
             }
             guard value != lastSaved else { error = nil; return true }
-            try onSave(value); lastSaved = value; error = nil; return true
+            try input.onSave(value); lastSaved = value; emptyRemovalCommitted = false; error = nil; return true
         }
         catch { self.error = localizedError(error); return false }
     }
 
+    @discardableResult func finish() -> Bool {
+        guard active else { return true }
+        guard flush(commitEmpty: true) else { return false }
+        active = false; autofocusRequested = false
+        input.onEditingChanged(false)
+        onClose?(); onClose = nil
+        return true
+    }
+
+    func discard() {
+        guard active else { return }
+        cancelAutosave()
+        discarded = true; active = false; autofocusRequested = false
+        input.onEditingChanged(false)
+        onClose?(); onClose = nil
+    }
+}
+
+private struct InlineTextEditorSession: View {
+    @Environment(\.taskHoverEnabled) private var taskHoverEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appTextScale) private var textScale
+    @Bindable var state: InlineTextEditingState
+    let input: InlineEditableText.Input
+    @State private var hintVisible = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let _ = state.updateInput(input)
+        let hintHeight: CGFloat = state.active && hintVisible ? 12 * textScale + 4 : 0
+        VStack(alignment: .leading, spacing: 4) {
+            editor
+                .padding(.horizontal, 7).padding(.vertical, 5)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(state.error == nil ? (focused ? Color.accentColor.opacity(0.5) : .clear) : .red.opacity(0.6)))
+            if state.active && hintVisible {
+                Text(inputHint).appFont(.system(size: 10)).foregroundStyle(.tertiary)
+                    .frame(height: 12 * textScale)
+                    .padding(.horizontal, 7).allowsHitTesting(false)
+                    .transition(reduceMotion ? .identity : .taskSection)
+            }
+            if let error = state.error { Text(error).appFont(.caption).foregroundStyle(.red).padding(.horizontal, 7) }
+        }
+        .alignmentGuide(VerticalAlignment.center) { dimensions in
+            (dimensions.height - hintHeight) / 2
+        }
+        .task {
+            guard state.autofocusRequested else { return }
+            await Task.yield()
+            guard !Task.isCancelled, state.active, state.autofocusRequested, !state.discarded else { return }
+            focused = true; state.autofocusRequested = false
+        }
+        .preference(key: InlineEditingPreference.self, value: focused)
+        .preference(key: InlineEditorOpenPreference.self, value: state.active)
+        .preference(key: InlineTextChangedPreference.self, value: state.active && state.textHasChanged)
+        .onChange(of: state.draft) { _, _ in state.draftChanged() }
+        .onChange(of: focused) { _, value in
+            withAnimation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.18)) { hintVisible = value }
+            if !value && state.active { _ = state.flush() }
+        }
+        .background {
+            TaskEditingBoundary(enabled: state.active, onSubmit: focused ? finishEditing : nil,
+                                onNextStep: focused && input.onNextStep != nil ? advanceStep : nil,
+                                avoidInitialSelection: input.avoidsInitialSelection && focused, onFlush: { request in
+                guard request.taskID == input.taskID else { return }
+                if request.resignFocus { state.autofocusRequested = false; focused = false }
+                let saved = request.finishEditing ? state.finish() : state.flush()
+                if !saved { request.failed = true }
+                else if request.finishEditing { focused = false; state.draft = state.lastSaved }
+            }, onDiscard: { id in
+                guard id == input.taskID else { return }
+                state.discard()
+            })
+        }
+        .onDisappear {
+            state.autofocusRequested = false
+            state.cancelAutosave()
+            guard !state.discarded else { return }
+            if !state.flush(), let error = state.error { input.onFailure(error) }
+        }
+    }
+
+    private var inputHint: String {
+        if input.onNextStep != nil { return L("↩ 保存任务 · ⇧↩ 下一个步骤") }
+        return input.multiline ? L("↩ 保存任务 · ⇧↩ 换行") : L("↩ 保存任务")
+    }
+
+    private func advanceStep() {
+        guard !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, state.flush() else { return }
+        input.onNextStep?()
+    }
+
+    @ViewBuilder private var editor: some View {
+        if input.multiline {
+            TextEditor(text: $state.draft)
+                .scrollContentBackground(.hidden).focused($focused)
+                .frame(height: max(64 * textScale, min(160 * textScale, (CGFloat(state.draft.components(separatedBy: "\n").count) * 18 + 12) * textScale)))
+                .overlay(alignment: .topLeading) {
+                    if state.draft.isEmpty {
+                        Text(input.placeholder).foregroundStyle(.tertiary).padding(.horizontal, 5).padding(.vertical, 1).allowsHitTesting(false)
+                    }
+                }
+                .help(input.help + L("；回车保存任务，Shift＋回车换行"))
+                .accessibilityLabel(input.help)
+                .onExitCommand { finishEditing() }
+        } else {
+            TextField(input.placeholder, text: $state.draft)
+                .textFieldStyle(.plain).focused($focused)
+                .help(input.help + L("；回车保存任务") + (input.onNextStep == nil ? "" : L("，Shift＋回车下一个步骤"))).accessibilityLabel(input.help)
+                .onExitCommand { finishEditing() }
+        }
+    }
+
     private func finishEditing() {
-        guard flush(commitEmpty: true) else { return }
-        if let taskID {
+        guard state.flush(commitEmpty: true) else { return }
+        if let taskID = input.taskID {
             let request = TaskEditingExitRequest(taskID: taskID)
             NotificationCenter.default.post(name: finishTaskEdits, object: request)
             guard !request.failed else { return }
         }
         withAnimation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.18)) {
-            focused = false; editing = false
+            if state.finish() { focused = false }
         }
         NSApp.keyWindow?.makeFirstResponder(nil)
     }
@@ -557,7 +656,7 @@ private struct InlineMetadataButton<Content: View>: View {
                     RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(taskHoverEnabled && (hovering || focused || voiceOverFocused) ? 0.055 : 0))
                         .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering || focused || voiceOverFocused)
                 }
-        }.buttonStyle(.plain).focused($focused).accessibilityFocused($voiceOverFocused)
+        }.buttonStyle(.plain).focused($focused).taskAccessibilityFocused($voiceOverFocused)
             .onHover { hovering = taskHoverEnabled && $0 }
             .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovering = false } }
             .preference(key: InlineEditingPreference.self, value: focused || voiceOverFocused)
@@ -587,7 +686,7 @@ private struct TaskMetadataRow: View {
                 .help(editHelp)
             Button(role: .destructive, action: onRemove) { Image(systemName: "xmark.circle").frame(width: 20, height: 20) }
                 .buttonStyle(HoverHighlightButtonStyle(cornerRadius: 10)).help(removeHelp).accessibilityLabel(removeLabel)
-                .focused($removeFocused).accessibilityFocused($removeVoiceOverFocused)
+                .focused($removeFocused).taskAccessibilityFocused($removeVoiceOverFocused)
                 .opacity(showRemove ? 1 : 0).allowsHitTesting(showRemove)
                 .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: showRemove)
                 .accessibilityHidden(false)
@@ -636,14 +735,14 @@ private struct TaskSubtaskRow: View {
                 .disabled(parentCompleted)
                 .help(parentCompleted ? L("请先撤销主任务完成，再调整步骤状态") : (child.completedAt == nil ? L("完成步骤，默认记录今天") : L("点击恢复为未完成；右键可修改完成日期")))
                 .accessibilityLabel(L("\(child.completedAt == nil ? L("完成步骤") : L("取消步骤完成")) \(child.title)"))
-                InlineEditableText(text: child.title, placeholder: L("步骤名称"), help: L("点击修改步骤名称；清空后回车移除步骤"), required: true, showsHoverBackground: false, taskID: taskID, saveOnBlur: isDraft, onEmptySave: onEmptySave, onNextStep: onNextStep, onDraftChange: onDraftChange, onSave: onSave, onFailure: onFailure)
+                InlineEditableText(text: child.title, placeholder: L("步骤名称"), help: L("点击修改步骤名称；清空后回车移除步骤"), required: true, showsHoverBackground: false, taskID: taskID, sessionID: "step:\(child.id)", saveOnBlur: isDraft, onEmptySave: onEmptySave, onNextStep: onNextStep, onDraftChange: onDraftChange, onSave: onSave, onFailure: onFailure)
                 Button(action: onRemove) {
                     Image(systemName: "minus.circle").frame(width: 24, height: 24).contentShape(Rectangle())
                 }
                 .buttonStyle(HoverHighlightButtonStyle(cornerRadius: 12)).foregroundStyle(.secondary)
                 .opacity(active ? 1 : 0)
                 .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: active)
-                .focused($removeFocused).accessibilityFocused($removeVoiceOverFocused)
+                .focused($removeFocused).taskAccessibilityFocused($removeVoiceOverFocused)
                 .accessibilityHidden(false)
                 .help(L("移除此步骤")).accessibilityLabel(L("移除步骤 \(child.title)"))
                 .preference(key: InlineEditingPreference.self, value: removeFocused || removeVoiceOverFocused || (editingCompletionDate && child.completedAt != nil))
@@ -710,7 +809,7 @@ private struct TaskBorderBackground: View {
     }
 }
 
-private struct DraftAttachment: Identifiable {
+fileprivate struct DraftAttachment: Identifiable {
     let url: URL
     let size: Int64
     var id: String { url.path }
@@ -777,6 +876,70 @@ final class TaskCardState: ObservableObject {
     }
 }
 
+@Observable @MainActor
+final class TaskCardEditingState {
+    var expandedOverride: Bool?
+    var editingRepeat = false
+    var customRepeat = false
+    var repeatDraft = RepeatRule()
+    var planningExpanded = false
+    var addingChild: Bool
+    var childInputID = UUID()
+    var detailsEditing: Bool
+    var focusDetailsOnAppear = false
+    var notesEditing: Bool
+    var focusNotesOnAppear = false
+    var error: String?
+    var discardedDraft = false
+    var editorsOpen: Bool
+    var editingBaseline: WorkTask?
+    var textHasChanges = false
+    var focusChildOnAppear = false
+    fileprivate var stagedAttachments: [DraftAttachment] = []
+    var fields: [String: InlineTextEditingState] = [:]
+    @ObservationIgnored var finishHandler: (() -> Bool)?
+
+    init(task: WorkTask, isDraft: Bool, initiallyExpanded: Bool = false) {
+        expandedOverride = initiallyExpanded ? true : nil
+        detailsEditing = isDraft
+        notesEditing = isDraft
+        addingChild = isDraft
+        editorsOpen = isDraft
+    }
+
+    @discardableResult func flushFields(finish: Bool = false) -> Bool {
+        for field in Array(fields.values) where field.active {
+            if finish ? !field.finish() : !field.flush() { return false }
+        }
+        return true
+    }
+
+    func discardFields() {
+        for field in Array(fields.values) { field.discard() }
+        fields.removeAll()
+    }
+
+    func discardMissingStepFields(existingIDs: Set<UUID>) {
+        for (key, field) in Array(fields) {
+            guard key.hasPrefix("step:"), let id = UUID(uuidString: String(key.dropFirst(5))),
+                  !existingIDs.contains(id), !(addingChild && childInputID == id) else { continue }
+            fields.removeValue(forKey: key)
+            field.discard()
+        }
+    }
+}
+
+private struct TaskCardEditingStateKey: EnvironmentKey {
+    static let defaultValue: TaskCardEditingState? = nil
+}
+
+extension EnvironmentValues {
+    var taskCardEditingState: TaskCardEditingState? {
+        get { self[TaskCardEditingStateKey.self] }
+        set { self[TaskCardEditingStateKey.self] = newValue }
+    }
+}
+
 struct ObservedTaskCard: View {
     let store: WorkStore
     let project: Project?
@@ -784,6 +947,7 @@ struct ObservedTaskCard: View {
     let isNavigationTarget: Bool
     let initiallyExpanded: Bool
     let draft: TaskDraftStorage?
+    let editingState: TaskCardEditingState?
     let onCreated: () -> Void
     let onCancel: () -> Void
     let onInitialExpansionConsumed: () -> Void
@@ -791,10 +955,11 @@ struct ObservedTaskCard: View {
     @AppStorage("appTimeFormat") private var timeFormat: AppTimeFormat = .system
     @StateObject private var state: TaskCardState
 
-    init(store: WorkStore, task: WorkTask, project: Project?, isHistory: Bool, isNavigationTarget: Bool = false, initiallyExpanded: Bool = false, draft: TaskDraftStorage? = nil, onCreated: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}, onInitialExpansionConsumed: @escaping () -> Void = {}) {
+    init(store: WorkStore, task: WorkTask, project: Project?, isHistory: Bool, isNavigationTarget: Bool = false, initiallyExpanded: Bool = false, draft: TaskDraftStorage? = nil, editingState: TaskCardEditingState? = nil, onCreated: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}, onInitialExpansionConsumed: @escaping () -> Void = {}) {
         self.store = store; self.project = project; self.isHistory = isHistory; self.draft = draft
         self.isNavigationTarget = isNavigationTarget
         self.initiallyExpanded = initiallyExpanded
+        self.editingState = editingState
         self.onCreated = onCreated; self.onCancel = onCancel
         self.onInitialExpansionConsumed = onInitialExpansionConsumed
         _state = StateObject(wrappedValue: TaskCardState(store: store, task: task, draft: draft))
@@ -802,7 +967,7 @@ struct ObservedTaskCard: View {
 
     var body: some View {
         TaskCard(store: store, task: state.task, project: project, isHistory: isHistory,
-                 isNavigationTarget: isNavigationTarget, initiallyExpanded: initiallyExpanded, languageIdentifier: language.localeIdentifier, timeFormat: timeFormat, draft: draft, onCreated: onCreated, onCancel: onCancel, onInitialExpansionConsumed: onInitialExpansionConsumed)
+                 isNavigationTarget: isNavigationTarget, initiallyExpanded: initiallyExpanded, languageIdentifier: language.localeIdentifier, timeFormat: timeFormat, draft: draft, editingState: editingState, onCreated: onCreated, onCancel: onCancel, onInitialExpansionConsumed: onInitialExpansionConsumed)
             .equatable()
     }
 }
@@ -815,6 +980,8 @@ struct TaskCard: View, Equatable {
     @Environment(\.taskPlanningDay) private var planningReferenceDate
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.taskDetailsMode) private var detailsMode
+    @Environment(\.taskListScrollState) private var scrollActivity
+    @Environment(\.taskListPreservesEditing) private var preservesEditingOnScroll
     @Environment(\.appTextScale) private var textScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("weekStart") private var weekStart = 5
@@ -830,7 +997,7 @@ struct TaskCard: View, Equatable {
     let onCancel: () -> Void
     let onInitialExpansionConsumed: () -> Void
     @State private var hovered = false
-    @State private var expandedOverride: Bool?
+    @State private var cardEditing: TaskCardEditingState
     @State private var textEditingFocused = false
     @State private var importingFiles = false
     @State private var dropTargeted = false
@@ -838,24 +1005,7 @@ struct TaskCard: View, Equatable {
     @State private var releaseFocusAfterDate = false
     @State private var dateCloseEvent: NSEvent?
     @State private var selectedDate = Date()
-    @State private var editingRepeat = false
-    @State private var customRepeat = false
-    @State private var repeatDraft = RepeatRule()
-    @State private var planningExpanded = false
-    @State private var addingChild = false
-    @State private var childInputID = UUID()
-    @State private var detailsEditing = false
-    @State private var focusDetailsOnAppear = false
-    @State private var notesEditing = false
-    @State private var focusNotesOnAppear = false
-    @State private var error: String?
     @State private var confirmDelete = false
-    @State private var discardedDraft = false
-    @State private var editorsOpen = false
-    @State private var editingBaseline: WorkTask?
-    @State private var textHasChanges = false
-    @State private var focusChildOnAppear = false
-    @State private var stagedAttachments: [DraftAttachment] = []
     @FocusState private var cardFocused: Bool
     @FocusState private var focusedAction: Action?
     @FocusState private var focusedAttachment: UUID?
@@ -870,29 +1020,34 @@ struct TaskCard: View, Equatable {
         var symbol: String { self == .reminder ? "bell" : "calendar" }
     }
     private let repeatPresets: [(String, Int, RepeatUnit)] = [(L("每天"), 1, .day), (L("每周"), 1, .week), (L("每月"), 1, .month), (L("每半年"), 6, .month), (L("每年"), 1, .year)]
+    private var error: String? {
+        get { cardEditing.error }
+        nonmutating set { cardEditing.error = newValue }
+    }
     private var taskHoverEnabled: Bool { taskDragState.taskID == nil }
+    private var passiveHover: Bool { hovered && !scrollActivity.scrolling }
     private var sectionTransition: AnyTransition { reduceMotion ? .identity : .taskSection }
     private var showActions: Bool {
-        showsDetails && taskHoverEnabled && (hovered || taskFocused || dateEditor != nil || importingFiles)
+        showsDetails && taskHoverEnabled && (passiveHover || taskFocused || dateEditor != nil || importingFiles)
     }
     private var showsDetails: Bool {
-        isDraft || editingSessionActive || editingRepeat || dateEditor != nil || importingFiles || (expandedOverride ?? (detailsMode == .expanded))
+        isDraft || editingSessionActive || cardEditing.editingRepeat || dateEditor != nil || importingFiles || (cardEditing.expandedOverride ?? (detailsMode == .expanded))
     }
     private var taskFocused: Bool { cardFocused || textEditingFocused || focusedAction != nil || voiceOverAction != nil || focusedAttachment != nil || voiceOverAttachment != nil }
     private var hasTaskChanges: Bool {
-        textHasChanges || editingBaseline.map { task.hasEditableChanges(comparedTo: $0) } == true
+        cardEditing.textHasChanges || cardEditing.editingBaseline.map { task.hasEditableChanges(comparedTo: $0) } == true
     }
-    private var editingSessionActive: Bool { editorsOpen || isDraft || editingBaseline != nil || planningExpanded }
+    private var editingSessionActive: Bool { cardEditing.editorsOpen || isDraft || cardEditing.editingBaseline != nil || cardEditing.planningExpanded }
     private var latestTask: WorkTask { store.data.tasks.first { $0.id == task.id } ?? draft?.task ?? task }
-    private var hasAttachments: Bool { !task.attachments.isEmpty || !stagedAttachments.isEmpty }
-    private var isDraft: Bool { !discardedDraft && draft?.task?.id == task.id && !store.data.tasks.contains { $0.id == task.id } }
+    private var hasAttachments: Bool { !task.attachments.isEmpty || !cardEditing.stagedAttachments.isEmpty }
+    private var isDraft: Bool { !cardEditing.discardedDraft && draft?.task?.id == task.id && !store.data.tasks.contains { $0.id == task.id } }
     private var projectColor: Color { project.map { Color(hex: $0.colorHex) } ?? .teal }
     private var hoverBorderColor: Color { project.map { Color(hex: $0.colorHex) } ?? .accentColor }
 
     private let draftID: UUID?
     private let nextTask: WorkTask?
 
-    init(store: WorkStore, task: WorkTask, project: Project?, isHistory: Bool, isNavigationTarget: Bool = false, initiallyExpanded: Bool = false, languageIdentifier: String = AppLocalization.languageIdentifier, timeFormat: AppTimeFormat = .system, draft: TaskDraftStorage? = nil, onCreated: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}, onInitialExpansionConsumed: @escaping () -> Void = {}) {
+    init(store: WorkStore, task: WorkTask, project: Project?, isHistory: Bool, isNavigationTarget: Bool = false, initiallyExpanded: Bool = false, languageIdentifier: String = AppLocalization.languageIdentifier, timeFormat: AppTimeFormat = .system, draft: TaskDraftStorage? = nil, editingState: TaskCardEditingState? = nil, onCreated: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}, onInitialExpansionConsumed: @escaping () -> Void = {}) {
         self.store = store; self.task = task; self.project = project; self.isHistory = isHistory; self.draft = draft
         self.isNavigationTarget = isNavigationTarget; self.languageIdentifier = languageIdentifier; self.timeFormat = timeFormat
         self.initiallyExpanded = initiallyExpanded
@@ -900,15 +1055,11 @@ struct TaskCard: View, Equatable {
         self.onInitialExpansionConsumed = onInitialExpansionConsumed
         draftID = draft?.task?.id
         nextTask = task.nextTaskID.flatMap { id in store.data.tasks.first { $0.id == id } }
-        _detailsEditing = State(initialValue: draftID == task.id)
-        _notesEditing = State(initialValue: draftID == task.id)
-        _addingChild = State(initialValue: draftID == task.id)
-        _editorsOpen = State(initialValue: draftID == task.id)
-        _expandedOverride = State(initialValue: initiallyExpanded ? true : nil)
+        _cardEditing = State(initialValue: editingState ?? TaskCardEditingState(task: task, isDraft: draftID == task.id, initiallyExpanded: initiallyExpanded))
     }
 
     static func == (lhs: TaskCard, rhs: TaskCard) -> Bool {
-        lhs.store === rhs.store && lhs.draft === rhs.draft && lhs.task == rhs.task && lhs.project == rhs.project
+        lhs.store === rhs.store && lhs.draft === rhs.draft && lhs.cardEditing === rhs.cardEditing && lhs.task == rhs.task && lhs.project == rhs.project
             && lhs.isHistory == rhs.isHistory && lhs.draftID == rhs.draftID
             && lhs.isNavigationTarget == rhs.isNavigationTarget && lhs.languageIdentifier == rhs.languageIdentifier
             && lhs.initiallyExpanded == rhs.initiallyExpanded
@@ -931,15 +1082,15 @@ struct TaskCard: View, Equatable {
                 if isHistory, task.completedAt != nil || task.completionSource?.lowercased() == "api" {
                     metadata.padding(.top, 6).transition(sectionTransition)
                 }
-                if detailsEditing || !task.details.isEmpty {
+                if cardEditing.detailsEditing || !task.details.isEmpty {
                     detailsEditor.padding(.top, 6).transition(sectionTransition)
                 }
-                if !task.subtasks.isEmpty || addingChild {
+                if !task.subtasks.isEmpty || cardEditing.addingChild {
                     subtasks.padding(.top, 6).transition(sectionTransition)
                 }
-                if notesEditing || !task.notes.isEmpty {
+                if cardEditing.notesEditing || !task.notes.isEmpty {
                     notesEditor.padding(.vertical, 3)
-                        .background(projectColor.opacity(notesEditing ? 0 : 0.035), in: RoundedRectangle(cornerRadius: 8))
+                        .background(projectColor.opacity(cardEditing.notesEditing ? 0 : 0.035), in: RoundedRectangle(cornerRadius: 8))
                         .padding(.top, 6).transition(sectionTransition)
                 }
                 if isDraft || hasAttachments {
@@ -977,18 +1128,18 @@ struct TaskCard: View, Equatable {
                         }
                     }.padding(.horizontal, 7).padding(.top, 6).transition(sectionTransition)
                 }
-                if editingRepeat { repeatControls.padding(.top, 6).transition(sectionTransition) }
+                if cardEditing.editingRepeat { repeatControls.padding(.top, 6).transition(sectionTransition) }
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor))
-                    .onTapGesture { if !showsDetails { animateLayout { expandedOverride = true } } }
+                    .onTapGesture { if !showsDetails { animateLayout { cardEditing.expandedOverride = true } } }
             }
             .overlay {
                 let fileDropActive = taskHoverEnabled && dropTargeted
-                let hoverActive = taskHoverEnabled && hovered && !isDraft
+                let hoverActive = taskHoverEnabled && passiveHover && !isDraft
                 let navigationActive = taskHoverEnabled && isNavigationTarget
                 let editingActive = taskHoverEnabled && taskFocused
                 RoundedRectangle(cornerRadius: 14)
@@ -1014,7 +1165,8 @@ struct TaskCard: View, Equatable {
                 }
             }
             Color.clear
-                .frame(height: showActions ? 20 : 4)
+                // Reserve the footer's overhang before hover or focus reveals its controls.
+                .frame(height: showsDetails ? 20 : 4)
                 .allowsHitTesting(false)
         }
         .background {
@@ -1024,20 +1176,23 @@ struct TaskCard: View, Equatable {
                     releaseTaskFocus()
                 }, onFinish: { request in
                     guard request.targets(task.id) else { return }
-                    if !finishTaskEditing() { request.failed = true }
+                    if !finishTaskEditing() { request.fail(for: task.id) }
                 })
             }
         }
-        .onHover { hovering in animateLayout { hovered = taskHoverEnabled && hovering } }
+        .onHover { hovering in
+            if scrollActivity.scrolling { hovered = taskHoverEnabled && hovering }
+            else { animateLayout { hovered = taskHoverEnabled && hovering } }
+        }
         .onChange(of: taskHoverEnabled) { _, enabled in
             if !enabled { hovered = false }
         }
         .focusable(interactions: .activate).focused($cardFocused).focusEffectDisabled()
         .onPreferenceChange(InlineEditorOpenPreference.self) { open in
             if open { beginTaskEditing() }
-            editorsOpen = open
+            cardEditing.editorsOpen = open
         }
-        .onPreferenceChange(InlineTextChangedPreference.self) { textHasChanges = $0 }
+        .onPreferenceChange(InlineTextChangedPreference.self) { cardEditing.textHasChanges = $0 }
         .onPreferenceChange(InlineEditingPreference.self) { focused in
             textEditingFocused = focused
             if !focused, NSApp.currentEvent?.type == .keyDown, NSApp.currentEvent?.keyCode == 48 {
@@ -1055,15 +1210,21 @@ struct TaskCard: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             if editingSessionActive { finishTaskEditing() }
         }
-        .onDisappear { if editingSessionActive && !discardedDraft { finishTaskEditing() } }
+        .onChange(of: editingSessionActive, initial: true) { _, active in
+            cardEditing.finishHandler = active ? finishTaskEditing : nil
+        }
+        .onDisappear { if !preservesEditingOnScroll && editingSessionActive && !cardEditing.discardedDraft { finishTaskEditing() } }
         .onAppear {
             loadStagedAttachments()
-            if isNavigationTarget { expandedOverride = true }
+            if isNavigationTarget { cardEditing.expandedOverride = true }
             if initiallyExpanded && !isDraft { onInitialExpansionConsumed() }
         }
-        .onChange(of: isNavigationTarget) { _, target in if target { animateLayout { expandedOverride = true } } }
+        .onChange(of: isNavigationTarget) { _, target in if target { animateLayout { cardEditing.expandedOverride = true } } }
         .onChange(of: detailsMode) { _, _ in
-            if finishTaskEditing() { animateLayout { expandedOverride = nil } }
+            if finishTaskEditing() { animateLayout { cardEditing.expandedOverride = nil } }
+        }
+        .onChange(of: task.subtasks.map(\.id), initial: true) { _, _ in
+            cardEditing.discardMissingStepFields(existingIDs: Set(latestTask.subtasks.map(\.id)))
         }
         .confirmationDialog(L("删除这项任务？"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button(L("删除任务"), role: .destructive, action: deleteTask)
@@ -1095,6 +1256,7 @@ struct TaskCard: View, Equatable {
             Button(L("删除任务"), role: .destructive, action: requestDelete).help(L("删除任务，可通过编辑菜单撤销"))
         }
         .environment(\.taskHoverEnabled, taskHoverEnabled)
+        .environment(\.taskCardEditingState, cardEditing)
     }
 
     private var heading: some View {
@@ -1113,11 +1275,11 @@ struct TaskCard: View, Equatable {
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.leading, 4)
                 .padding(.trailing, 6)
-            InlineEditableText(text: task.title, placeholder: L("任务名称"), help: L("点击修改任务名称，回车保存任务"), required: true, font: .system(size: 15, weight: .semibold), taskID: task.id, saveOnBlur: isDraft, initiallyEditing: isDraft, autofocus: isDraft, allowEmpty: isDraft, avoidsInitialSelection: true, onDraftChange: { value in stageTask { $0.title = value } }) { value in
+            InlineEditableText(text: task.title, placeholder: L("任务名称"), help: L("点击修改任务名称，回车保存任务"), required: true, font: .system(size: 15, weight: .semibold), taskID: task.id, sessionID: "title", saveOnBlur: isDraft, initiallyEditing: isDraft, autofocus: isDraft, allowEmpty: isDraft, avoidsInitialSelection: true, onDraftChange: { value in stageTask { $0.title = value } }) { value in
                 try updateTask { $0.title = value }
             } onFailure: { store.errorMessage = $0 }
             } else {
-                Button { animateLayout { expandedOverride = true } } label: {
+                Button { animateLayout { cardEditing.expandedOverride = true } } label: {
                     Text(task.title).appFont(.system(size: 15, weight: .semibold))
                         .frame(maxWidth: .infinity, alignment: .leading).lineLimit(2)
                         .padding(.horizontal, 7).padding(.vertical, 5)
@@ -1174,7 +1336,7 @@ struct TaskCard: View, Equatable {
 
     private var planningRow: some View {
         HStack(spacing: 10) {
-            TaskPlanPicker(date: .constant(task.plannedAt), granularity: .constant(task.planGranularity), expanded: $planningExpanded, currentTitle: planTitle, detail: task.plannedAt.map(planDateDescription) ?? L("尚未安排"), isOverdue: planOverdue, onSelect: updatePlan)
+            TaskPlanPicker(date: .constant(task.plannedAt), granularity: .constant(task.planGranularity), expanded: $cardEditing.planningExpanded, currentTitle: planTitle, detail: task.plannedAt.map(planDateDescription) ?? L("尚未安排"), isOverdue: planOverdue, onSelect: updatePlan)
             if planOverdue {
                 Text(L("已超时")).appFont(.caption.weight(.semibold)).foregroundStyle(.red)
                     .padding(.horizontal, 7).padding(.vertical, 3)
@@ -1196,7 +1358,7 @@ struct TaskCard: View, Equatable {
                         perform { try store.setCompletionDate(taskID: task.id, at: date) }
                     }), in: ...Date(), displayedComponents: .date)
                         .labelsHidden().datePickerStyle(.field).help(L("直接修改主任务完成日期，工作周期会同步调整"))
-                        .focused($focusedAction, equals: .completionDate).accessibilityFocused($voiceOverAction, equals: .completionDate)
+                        .focused($focusedAction, equals: .completionDate).taskAccessibilityFocused($voiceOverAction, equals: .completionDate)
                     if task.nextTaskID != nil {
                         Text(L("不改变下一次任务日期")).foregroundStyle(.secondary).help(L("若需调整下一次日期，请点击下方“下一次任务”后修改"))
                     }
@@ -1214,7 +1376,7 @@ struct TaskCard: View, Equatable {
 
     private func togglePlanning() {
         guard flushEdits() else { return }
-        planningExpanded.toggle()
+        cardEditing.planningExpanded.toggle()
     }
 
     private func updatePlan(_ date: Date?, _ precision: TaskPlanGranularity?) {
@@ -1235,13 +1397,13 @@ struct TaskCard: View, Equatable {
     }
 
     private var detailsEditor: some View {
-        InlineEditableText(text: task.details, placeholder: L("填写任务明细"), help: L("点击修改任务明细"), multiline: true, taskID: task.id, saveOnBlur: isDraft, initiallyEditing: detailsEditing, autofocus: focusDetailsOnAppear, onEditingChanged: { editing in animateLayout { detailsEditing = editing; focusDetailsOnAppear = false } }, onDraftChange: { value in stageTask { $0.details = value } }) { value in
+        InlineEditableText(text: task.details, placeholder: L("填写任务明细"), help: L("点击修改任务明细"), multiline: true, taskID: task.id, sessionID: "details", saveOnBlur: isDraft, initiallyEditing: cardEditing.detailsEditing, autofocus: cardEditing.focusDetailsOnAppear, onEditingChanged: { editing in animateLayout { cardEditing.detailsEditing = editing; cardEditing.focusDetailsOnAppear = false } }, onDraftChange: { value in stageTask { $0.details = value } }) { value in
             try updateTask { $0.details = value }
         } onFailure: { store.errorMessage = $0 }
     }
 
     private var notesEditor: some View {
-        InlineEditableText(text: task.notes, placeholder: L("填写备注"), help: L("点击修改备注"), multiline: true, taskID: task.id, saveOnBlur: isDraft, initiallyEditing: notesEditing, autofocus: focusNotesOnAppear, onEditingChanged: { editing in animateLayout { notesEditing = editing; focusNotesOnAppear = false } }, onDraftChange: { value in stageTask { $0.notes = value } }) { value in
+        InlineEditableText(text: task.notes, placeholder: L("填写备注"), help: L("点击修改备注"), multiline: true, taskID: task.id, sessionID: "notes", saveOnBlur: isDraft, initiallyEditing: cardEditing.notesEditing, autofocus: cardEditing.focusNotesOnAppear, onEditingChanged: { editing in animateLayout { cardEditing.notesEditing = editing; cardEditing.focusNotesOnAppear = false } }, onDraftChange: { value in stageTask { $0.notes = value } }) { value in
             try updateTask { $0.notes = value }
         } onFailure: { store.errorMessage = $0 }
     }
@@ -1257,11 +1419,11 @@ struct TaskCard: View, Equatable {
                         Text(Image(systemName: "plus")).appFont(.caption.weight(.semibold))
                     }
                         .help(L("添加步骤并开始编辑")).accessibilityLabel(L("添加步骤"))
-                        .focused($focusedAction, equals: .addChild).accessibilityFocused($voiceOverAction, equals: .addChild)
+                        .focused($focusedAction, equals: .addChild).taskAccessibilityFocused($voiceOverAction, equals: .addChild)
                         .opacity(showActions ? 1 : 0)
                 }
             }.padding(.horizontal, 7)
-            ForEach(task.subtasks.filter { !addingChild || $0.id != childInputID }) { child in
+            ForEach(task.subtasks.filter { !cardEditing.addingChild || $0.id != cardEditing.childInputID }) { child in
                 TaskSubtaskRow(taskID: task.id, child: child, parentCompleted: task.completedAt != nil, isDraft: isDraft, onComplete: {
                     guard flushEdits() else { return }
                     if draft?.task?.id == task.id {
@@ -1286,18 +1448,18 @@ struct TaskCard: View, Equatable {
                     perform { try store.setSubtaskCompletionDate(taskID: task.id, subtaskID: child.id, at: date) }
                 }).padding(.top, 4).transition(sectionTransition)
             }
-            if addingChild {
-                let inputID = childInputID
+            if cardEditing.addingChild {
+                let inputID = cardEditing.childInputID
                 HStack(alignment: .center, spacing: 0) {
                     Image(systemName: "circle").foregroundStyle(.secondary)
                         .frame(width: 24, height: 24).frame(width: 36).accessibilityHidden(true)
-                    InlineEditableText(text: task.subtasks.first { $0.id == inputID }?.title ?? "", placeholder: L("步骤名称"), help: L("新步骤名称"), taskID: task.id, saveOnBlur: true, initiallyEditing: true, autofocus: focusChildOnAppear, onNextStep: {
-                        animateLayout { childInputID = UUID(); focusChildOnAppear = true }
+                    InlineEditableText(text: task.subtasks.first { $0.id == inputID }?.title ?? "", placeholder: L("步骤名称"), help: L("新步骤名称"), taskID: task.id, sessionID: "step:\(inputID)", saveOnBlur: true, initiallyEditing: true, autofocus: cardEditing.focusChildOnAppear, onNextStep: {
+                        animateLayout { cardEditing.childInputID = UUID(); cardEditing.focusChildOnAppear = true }
                     }, onEditingChanged: { editing in
-                        guard childInputID == inputID else { return }
+                        guard cardEditing.childInputID == inputID else { return }
                         animateLayout {
-                            focusChildOnAppear = false
-                            if !editing { addingChild = false }
+                            cardEditing.focusChildOnAppear = false
+                            if !editing { cardEditing.addingChild = false }
                         }
                     }, onSave: { try saveChild($0, id: inputID) }) { store.errorMessage = $0 }
                 }.id(inputID).padding(.top, 7).transition(sectionTransition)
@@ -1308,14 +1470,14 @@ struct TaskCard: View, Equatable {
     private var attachments: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(L("附件 · \(task.attachments.count + stagedAttachments.count)"))
+                Text(L("附件 · \(task.attachments.count + cardEditing.stagedAttachments.count)"))
                     .appFont(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(.secondary)
                 if hasAttachments {
                     HoverGlassButton(size: 24, action: { importingFiles = true }) {
                         Text(Image(systemName: "plus")).appFont(.caption.weight(.semibold))
                     }
                         .help(L("添加本地附件，也可以直接拖入文件")).accessibilityLabel(L("添加附件"))
-                        .focused($focusedAction, equals: .attachment).accessibilityFocused($voiceOverAction, equals: .attachment)
+                        .focused($focusedAction, equals: .attachment).taskAccessibilityFocused($voiceOverAction, equals: .attachment)
                         .opacity(showActions ? 1 : 0)
                 }
             }.padding(.horizontal, 7)
@@ -1351,13 +1513,13 @@ struct TaskCard: View, Equatable {
                                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(L("附件操作：打开、定位、另存为或移除"))
                                 .accessibilityLabel(L("附件 \(attachment.name) 的操作"))
                                 .focused($focusedAttachment, equals: attachment.id)
-                                .accessibilityFocused($voiceOverAttachment, equals: attachment.id)
+                                .taskAccessibilityFocused($voiceOverAttachment, equals: attachment.id)
                                 .opacity(showActions ? 1 : 0)
                                 .accessibilityHidden(false)
                         }.padding(.horizontal, 8).padding(.vertical, 4)
                             .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 7))
                     }
-                    ForEach(stagedAttachments) { attachment in
+                    ForEach(cardEditing.stagedAttachments) { attachment in
                         HStack(spacing: 9) {
                             Image(systemName: "doc").foregroundStyle(projectColor)
                             Button(attachment.name) {
@@ -1368,7 +1530,7 @@ struct TaskCard: View, Equatable {
                             Button {
                                 perform {
                                     try FileManager.default.removeItem(at: attachment.url.deletingLastPathComponent())
-                                    stagedAttachments.removeAll { $0.id == attachment.id }
+                                    cardEditing.stagedAttachments.removeAll { $0.id == attachment.id }
                                 }
                             } label: { Image(systemName: "minus.circle") }
                                 .buttonStyle(HoverHighlightButtonStyle()).help(L("移除此草稿附件")).accessibilityLabel(L("移除草稿附件 \(attachment.name)"))
@@ -1377,7 +1539,7 @@ struct TaskCard: View, Equatable {
                     }
                 }
             }
-            if !isDraft && !stagedAttachments.isEmpty {
+            if !isDraft && !cardEditing.stagedAttachments.isEmpty {
                 Button(L("重试保存附件")) { perform { try importStagedAttachments() } }
                     .buttonStyle(.link).appFont(.caption).help(L("重新将保留的草稿附件保存到任务中"))
             }
@@ -1401,49 +1563,49 @@ struct TaskCard: View, Equatable {
 
     private var footerActions: some View {
         HStack(spacing: 4) {
-            if task.details.isEmpty && !detailsEditing {
-                Button { animateLayout { focusDetailsOnAppear = true; detailsEditing = true } } label: { Label(L("任务明细"), systemImage: "text.alignleft") }
+            if task.details.isEmpty && !cardEditing.detailsEditing {
+                Button { animateLayout { cardEditing.focusDetailsOnAppear = true; cardEditing.detailsEditing = true } } label: { Label(L("任务明细"), systemImage: "text.alignleft") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small)
                     .help(L("添加任务明细并开始编辑")).accessibilityLabel(L("添加任务明细"))
-                    .focused($focusedAction, equals: .addDetails).accessibilityFocused($voiceOverAction, equals: .addDetails)
+                    .focused($focusedAction, equals: .addDetails).taskAccessibilityFocused($voiceOverAction, equals: .addDetails)
             }
-            if task.notes.isEmpty && !notesEditing {
-                Button { animateLayout { focusNotesOnAppear = true; notesEditing = true } } label: { Label(L("备注"), systemImage: "note.text") }
+            if task.notes.isEmpty && !cardEditing.notesEditing {
+                Button { animateLayout { cardEditing.focusNotesOnAppear = true; cardEditing.notesEditing = true } } label: { Label(L("备注"), systemImage: "note.text") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small)
                     .help(L("添加备注并开始编辑")).accessibilityLabel(L("添加备注"))
-                    .focused($focusedAction, equals: .addNotes).accessibilityFocused($voiceOverAction, equals: .addNotes)
+                    .focused($focusedAction, equals: .addNotes).taskAccessibilityFocused($voiceOverAction, equals: .addNotes)
             }
-            if task.subtasks.isEmpty && !addingChild {
+            if task.subtasks.isEmpty && !cardEditing.addingChild {
                 Button(action: beginAddingChild) { Label(L("步骤"), systemImage: "checklist") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small)
                     .help(L("添加步骤并开始编辑")).accessibilityLabel(L("添加步骤"))
-                    .focused($focusedAction, equals: .addChild).accessibilityFocused($voiceOverAction, equals: .addChild)
+                    .focused($focusedAction, equals: .addChild).taskAccessibilityFocused($voiceOverAction, equals: .addChild)
             }
             if !hasAttachments {
                 Button { importingFiles = true } label: { Label(L("附件"), systemImage: "paperclip") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("添加本地附件，也可以直接拖入文件")).accessibilityLabel(L("添加附件"))
-                    .focused($focusedAction, equals: .attachment).accessibilityFocused($voiceOverAction, equals: .attachment)
+                    .focused($focusedAction, equals: .attachment).taskAccessibilityFocused($voiceOverAction, equals: .attachment)
             }
             if task.reminderAt == nil {
                 Button { openDate(.reminder) } label: { Label(L("提醒日期"), systemImage: "bell.badge") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("添加提醒日期与时间"))
-                    .focused($focusedAction, equals: .reminder).accessibilityFocused($voiceOverAction, equals: .reminder)
+                    .focused($focusedAction, equals: .reminder).taskAccessibilityFocused($voiceOverAction, equals: .reminder)
                     .popover(isPresented: datePresented(.reminder), attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) { datePicker(.reminder) }
             }
             if task.dueAt == nil {
                 Button { openDate(.due) } label: { Label(L("截止日期"), systemImage: "calendar.badge.plus") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("添加截止日期"))
-                    .focused($focusedAction, equals: .due).accessibilityFocused($voiceOverAction, equals: .due)
+                    .focused($focusedAction, equals: .due).taskAccessibilityFocused($voiceOverAction, equals: .due)
                     .popover(isPresented: datePresented(.due), attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) { datePicker(.due) }
             }
             if task.repeatRule == nil {
                 Button(action: openRepeat) { Label(L("循环"), systemImage: "repeat") }
                     .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("选择常用循环周期或自定义周期"))
-                    .focused($focusedAction, equals: .recurrence).accessibilityFocused($voiceOverAction, equals: .recurrence)
+                    .focused($focusedAction, equals: .recurrence).taskAccessibilityFocused($voiceOverAction, equals: .recurrence)
             }
             Button(role: .destructive, action: requestDelete) { Image(systemName: "trash") }
                 .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(draft?.task?.id == task.id ? L("取消新增任务") : L("删除任务，确认后可撤销（⌘Z）")).accessibilityLabel(draft?.task?.id == task.id ? L("取消新增任务") : L("删除任务"))
-                .focused($focusedAction, equals: .delete).accessibilityFocused($voiceOverAction, equals: .delete)
+                .focused($focusedAction, equals: .delete).taskAccessibilityFocused($voiceOverAction, equals: .delete)
         }
         .lineLimit(1)
     }
@@ -1498,32 +1660,32 @@ struct TaskCard: View, Equatable {
             HStack {
                 Text(L("循环周期")).appFont(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
-                Button { animateLayout { editingRepeat = false } } label: { Image(systemName: "xmark") }
+                Button { animateLayout { cardEditing.editingRepeat = false } } label: { Image(systemName: "xmark") }
                     .buttonStyle(HoverHighlightButtonStyle()).help(L("收起循环选择")).accessibilityLabel(L("收起循环选择"))
             }
             HStack(spacing: 6) {
                 ForEach(repeatPresets.indices, id: \.self) { index in
                     let preset = repeatPresets[index]
                     Button(preset.0) {
-                        saveRepeat(RepeatRule(every: preset.1, unit: preset.2, basis: repeatDraft.basis), close: true)
+                        saveRepeat(RepeatRule(every: preset.1, unit: preset.2, basis: cardEditing.repeatDraft.basis), close: true)
                     }.nativeActionButton().controlSize(.small).help(L("设为\(preset.0)循环"))
                 }
-                Button(L("自定义…")) { animateLayout { customRepeat = true } }
+                Button(L("自定义…")) { animateLayout { cardEditing.customRepeat = true } }
                     .nativeActionButton().controlSize(.small).help(L("自定义间隔、单位与循环依据"))
             }
-            if customRepeat {
+            if cardEditing.customRepeat {
                 HStack {
-                    Stepper(L("每隔 \(repeatDraft.every)"), value: Binding(get: { repeatDraft.every }, set: { value in
-                        var rule = repeatDraft; rule.every = value; saveRepeat(rule)
+                    Stepper(L("每隔 \(cardEditing.repeatDraft.every)"), value: Binding(get: { cardEditing.repeatDraft.every }, set: { value in
+                        var rule = cardEditing.repeatDraft; rule.every = value; saveRepeat(rule)
                     }), in: 1...10000).fixedSize().help(L("调整自定义循环间隔"))
-                    Picker(L("循环单位"), selection: Binding(get: { repeatDraft.unit }, set: { value in
-                        var rule = repeatDraft; rule.unit = value; saveRepeat(rule)
+                    Picker(L("循环单位"), selection: Binding(get: { cardEditing.repeatDraft.unit }, set: { value in
+                        var rule = cardEditing.repeatDraft; rule.unit = value; saveRepeat(rule)
                     })) {
                         Text(L("天")).tag(RepeatUnit.day); Text(L("周")).tag(RepeatUnit.week)
                         Text(L("个月")).tag(RepeatUnit.month); Text(L("年")).tag(RepeatUnit.year)
                     }.labelsHidden().frame(width: 90).help(L("选择循环单位"))
-                    Picker(L("循环依据"), selection: Binding(get: { repeatDraft.basis }, set: { value in
-                        var rule = repeatDraft; rule.basis = value; saveRepeat(rule)
+                    Picker(L("循环依据"), selection: Binding(get: { cardEditing.repeatDraft.basis }, set: { value in
+                        var rule = cardEditing.repeatDraft; rule.basis = value; saveRepeat(rule)
                     })) {
                         Text(L("实际完成日")).tag(RepeatBasis.completion)
                         Text(L("截止日期")).tag(RepeatBasis.schedule).disabled(latestTask.dueAt == nil)
@@ -1547,7 +1709,7 @@ struct TaskCard: View, Equatable {
         releaseFocusAfterDate = false
         dateCloseEvent = nil
         selectedDate = (field == .reminder ? latestTask.reminderAt : latestTask.dueAt) ?? shortcutDate(field, offset: field == .reminder ? 1 : 0)
-        editingRepeat = false
+        cardEditing.editingRepeat = false
         dateEditor = field
     }
 
@@ -1575,7 +1737,7 @@ struct TaskCard: View, Equatable {
                 }
             }
             if dateEditor == field { dateEditor = nil }
-            if let rule = latestTask.repeatRule { repeatDraft = rule }
+            if let rule = latestTask.repeatRule { cardEditing.repeatDraft = rule }
             releaseTaskFocus()
         }
     }
@@ -1589,10 +1751,10 @@ struct TaskCard: View, Equatable {
     private func openRepeat() {
         guard flushEdits() else { return }
         animateLayout {
-            if editingRepeat { editingRepeat = false; return }
-            repeatDraft = latestTask.repeatRule ?? RepeatRule()
-            customRepeat = latestTask.repeatRule != nil
-            dateEditor = nil; editingRepeat = true
+            if cardEditing.editingRepeat { cardEditing.editingRepeat = false; return }
+            cardEditing.repeatDraft = latestTask.repeatRule ?? RepeatRule()
+            cardEditing.customRepeat = latestTask.repeatRule != nil
+            dateEditor = nil; cardEditing.editingRepeat = true
         }
     }
 
@@ -1602,8 +1764,8 @@ struct TaskCard: View, Equatable {
                 if $0.repeatRule != rule { $0.scheduleAnchor = nil }
                 $0.repeatRule = rule
             }
-            repeatDraft = rule
-            if close { editingRepeat = false; releaseTaskFocus() }
+            cardEditing.repeatDraft = rule
+            if close { cardEditing.editingRepeat = false; releaseTaskFocus() }
         }
     }
 
@@ -1611,13 +1773,13 @@ struct TaskCard: View, Equatable {
         guard flushEdits() else { return }
         perform {
             try updateTask { $0.repeatRule = nil; $0.scheduleAnchor = nil }
-            editingRepeat = false
+            cardEditing.editingRepeat = false
             releaseTaskFocus()
         }
     }
 
     private func prepareDrag() -> Data? {
-        guard !isDraft, !discardedDraft, store.data.tasks.contains(where: { $0.id == task.id }) else {
+        guard !isDraft, !cardEditing.discardedDraft, store.data.tasks.contains(where: { $0.id == task.id }) else {
             return nil
         }
         guard flushEdits() else { return nil }
@@ -1636,6 +1798,11 @@ struct TaskCard: View, Equatable {
     }
 
     @discardableResult private func flushEdits() -> Bool {
+        cardEditing.discardMissingStepFields(existingIDs: Set(latestTask.subtasks.map(\.id)))
+        guard cardEditing.flushFields() else {
+            error = L("请先修正正在编辑的内容，再继续操作。")
+            return false
+        }
         let request = InlineFlushRequest(taskID: task.id)
         NotificationCenter.default.post(name: flushTaskEdits, object: request)
         if request.failed { error = L("请先修正正在编辑的内容，再继续操作。") }
@@ -1654,13 +1821,13 @@ struct TaskCard: View, Equatable {
     private func toggleDetails() {
         if showsDetails {
             guard finishTaskEditing() else { return }
-            animateLayout { expandedOverride = false }
-        } else { animateLayout { expandedOverride = true } }
+            animateLayout { cardEditing.expandedOverride = false }
+        } else { animateLayout { cardEditing.expandedOverride = true } }
     }
 
     private func beginTaskEditing() {
-        expandedOverride = true
-        if editingBaseline == nil { editingBaseline = latestTask }
+        cardEditing.expandedOverride = true
+        if cardEditing.editingBaseline == nil { cardEditing.editingBaseline = latestTask }
     }
 
     private func animateLayout<Result>(_ changes: () throws -> Result) rethrows -> Result {
@@ -1682,7 +1849,7 @@ struct TaskCard: View, Equatable {
     }
 
     private func updateTask(_ changes: (inout WorkTask) -> Void) throws {
-        guard !discardedDraft else { return }
+        guard !cardEditing.discardedDraft else { return }
         try animateLayout {
             beginTaskEditing()
             if isDraft {
@@ -1694,9 +1861,9 @@ struct TaskCard: View, Equatable {
     }
 
     @discardableResult private func persistTaskEditing() -> Bool {
-        guard !discardedDraft, isDraft || store.data.tasks.contains(where: { $0.id == task.id }) else { return true }
+        guard !cardEditing.discardedDraft, isDraft || store.data.tasks.contains(where: { $0.id == task.id }) else { return true }
         guard flushEdits() else { return false }
-        if isDraft, latestTask.isEmptyDraft, stagedAttachments.isEmpty { return true }
+        if isDraft, latestTask.isEmptyDraft, cardEditing.stagedAttachments.isEmpty { return true }
         do {
             if draft?.task?.id == task.id { try commitDraft(finishCreation: false) }
             error = nil
@@ -1706,20 +1873,26 @@ struct TaskCard: View, Equatable {
 
     @discardableResult private func finishTaskEditing() -> Bool {
         animateLayout {
-            guard !discardedDraft, isDraft || store.data.tasks.contains(where: { $0.id == task.id }) else { return true }
+            guard editingSessionActive || cardEditing.fields.values.contains(where: \.active) else {
+                cardEditing.finishHandler = nil
+                return true
+            }
+            guard !cardEditing.discardedDraft, isDraft || store.data.tasks.contains(where: { $0.id == task.id }) else { return true }
             guard persistTaskEditing() else { return false }
-            if isDraft, latestTask.isEmptyDraft, stagedAttachments.isEmpty {
+            if isDraft, latestTask.isEmptyDraft, cardEditing.stagedAttachments.isEmpty {
                 requestDelete()
                 return true
             }
             let finishingCreation = draft?.task?.id == task.id
+            guard cardEditing.flushFields(finish: true) else { return false }
             let request = InlineFlushRequest(taskID: task.id, finishEditing: true)
             NotificationCenter.default.post(name: flushTaskEdits, object: request)
             guard !request.failed else { return false }
-            detailsEditing = false; notesEditing = false; addingChild = false; editorsOpen = false
-            dateEditor = nil; editingRepeat = false; planningExpanded = false
+            cardEditing.detailsEditing = false; cardEditing.notesEditing = false; cardEditing.addingChild = false; cardEditing.editorsOpen = false
+            dateEditor = nil; cardEditing.editingRepeat = false; cardEditing.planningExpanded = false
             cardFocused = false; focusedAction = nil; focusedAttachment = nil
-            editingBaseline = nil; textHasChanges = false
+            cardEditing.editingBaseline = nil; cardEditing.textHasChanges = false
+            cardEditing.finishHandler = nil
             error = nil
             if finishingCreation { onCreated() }
             return true
@@ -1747,7 +1920,9 @@ struct TaskCard: View, Equatable {
     }
 
     private func discardDraft() {
-        discardedDraft = true
+        cardEditing.discardedDraft = true
+        cardEditing.discardFields()
+        cardEditing.finishHandler = nil
         NotificationCenter.default.post(name: discardTaskEdits, object: task.id)
         onCancel()
         if FileManager.default.fileExists(atPath: draftAttachmentDirectory.path) {
@@ -1802,7 +1977,7 @@ struct TaskCard: View, Equatable {
 
     private func beginAddingChild() {
         guard flushEdits() else { return }
-        animateLayout { childInputID = UUID(); focusChildOnAppear = true; addingChild = true }
+        animateLayout { cardEditing.childInputID = UUID(); cardEditing.focusChildOnAppear = true; cardEditing.addingChild = true }
     }
 
     private func removeChild(_ id: UUID) throws {
@@ -1879,7 +2054,7 @@ struct TaskCard: View, Equatable {
                 } catch { try? files.removeItem(at: folder); throw error }
                 copied.append(DraftAttachment(url: destination, size: Int64(info.fileSize ?? 0)))
             }
-            stagedAttachments.append(contentsOf: copied)
+            cardEditing.stagedAttachments.append(contentsOf: copied)
         } catch {
             for attachment in copied { try? files.removeItem(at: attachment.url.deletingLastPathComponent()) }
             throw error
@@ -1900,14 +2075,14 @@ struct TaskCard: View, Equatable {
                     pending.append(DraftAttachment(url: file, size: Int64(metadata.fileSize ?? 0)))
                 }
             }
-            stagedAttachments = pending.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            cardEditing.stagedAttachments = pending.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
     }
 
     private func importStagedAttachments() throws {
-        guard !stagedAttachments.isEmpty else { return }
-        try store.addAttachments(urls: stagedAttachments.map(\.url), to: task.id)
-        stagedAttachments = []
+        guard !cardEditing.stagedAttachments.isEmpty else { return }
+        try store.addAttachments(urls: cardEditing.stagedAttachments.map(\.url), to: task.id)
+        cardEditing.stagedAttachments = []
         try? FileManager.default.removeItem(at: draftAttachmentDirectory)
     }
 

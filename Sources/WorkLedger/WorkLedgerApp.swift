@@ -1,15 +1,19 @@
 import SwiftUI
 import Combine
+import AppKit
 import WorkLedgerCore
 
 @main
 @MainActor
 struct WorkLedgerApp: App {
+    @NSApplicationDelegateAdaptor(TaskApplicationDelegate.self) private var applicationDelegate
     @State private var store: WorkStore
     @State private var services: AppServices
     @AppStorage("appAppearance") private var appearance: AppAppearance = .system
     @AppStorage("appTextSize") private var textSize: AppTextSize = .standard
     @AppStorage("appLanguage") private var language: AppLanguage = .system
+    @AppStorage("runInMenuBar") private var runInMenuBar = true
+    @State private var pendingMenuTaskID: UUID?
     private let startupError: String?
     private let originalDirectory: URL
 
@@ -52,10 +56,19 @@ struct WorkLedgerApp: App {
                 }
             }
             .frame(minWidth: 1000, minHeight: 660)
+            .background(TaskWindowCloseBoundary())
             .preferredColorScheme(appearance.colorScheme)
             .environment(\.locale, language.locale)
             .environment(\.appTextScale, textSize.scale)
             .appFont(.body)
+            .task(id: pendingMenuTaskID) {
+                guard let id = pendingMenuTaskID else { return }
+                // Wait until the window's task notification receiver has been mounted.
+                await Task.yield()
+                guard !Task.isCancelled, pendingMenuTaskID == id else { return }
+                NotificationCenter.default.post(name: .init("WorkLedger.openTask"), object: id.uuidString)
+                pendingMenuTaskID = nil
+            }
             .onChange(of: language) { _, _ in
                 guard startupError == nil else { return }
                 services.retryNotifications()
@@ -94,8 +107,8 @@ struct WorkLedgerApp: App {
             .appFont(.body)
         }
 
-        MenuBarExtra(L("工作清单"), systemImage: "checklist") {
-            MenuContent(store: store)
+        MenuBarExtra(L("工作清单"), systemImage: "checklist", isInserted: $runInMenuBar) {
+            MenuContent(store: store, onOpenTask: { pendingMenuTaskID = $0 })
                 .preferredColorScheme(appearance.colorScheme)
                 .environment(\.locale, language.locale)
                 .environment(\.appTextScale, textSize.scale)
@@ -109,28 +122,162 @@ struct WorkLedgerApp: App {
     }
 }
 
+@MainActor
+enum TaskCloseValidation {
+    static func finishEditing() -> Bool {
+        let request = TaskEditingExitRequest()
+        NotificationCenter.default.post(name: finishTaskEdits, object: request)
+        if let id = request.failedTaskID {
+            // Reuse RootView's validation recovery, including revealing a hidden invalid editor.
+            NotificationCenter.default.post(name: .init("WorkLedger.openTask"), object: id.uuidString)
+        }
+        return !request.failed
+    }
+}
+
+@MainActor
+final class TaskApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        TaskCloseValidation.finishEditing() ? .terminateNow : .terminateCancel
+    }
+}
+
+@MainActor
+final class TaskWindowCloseProxy: NSObject, NSWindowDelegate {
+    // NSObject's selector forwarding is nonisolated; this weak reference is otherwise used on the UI thread.
+    nonisolated(unsafe) weak var originalDelegate: NSWindowDelegate?
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard TaskCloseValidation.finishEditing() else { return false }
+        return originalDelegate?.windowShouldClose?(sender) ?? true
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector) || originalDelegate?.responds(to: selector) == true
+    }
+
+    nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
+        if let originalDelegate, originalDelegate.responds(to: selector) { return originalDelegate }
+        return super.forwardingTarget(for: selector)
+    }
+}
+
+struct TaskWindowCloseBoundary: NSViewRepresentable {
+    func makeNSView(context: Context) -> BridgeView { BridgeView(frame: .zero) }
+    func updateNSView(_ view: BridgeView, context: Context) { view.installIfNeeded() }
+    static func dismantleNSView(_ view: BridgeView, coordinator: ()) { view.uninstall() }
+
+    final class BridgeView: NSView {
+        let proxy = TaskWindowCloseProxy()
+        private weak var protectedWindow: NSWindow?
+        private var generation = 0
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            installIfNeeded()
+            let expectedGeneration = generation
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == expectedGeneration else { return }
+                // SwiftUI can finish installing its window delegate later in the same turn.
+                self.installIfNeeded()
+            }
+        }
+
+        func installIfNeeded() {
+            guard let window else { uninstall(); return }
+            if protectedWindow !== window { uninstall(); protectedWindow = window }
+            guard window.delegate !== proxy else { return }
+            if let existing = window.delegate as? TaskWindowCloseProxy { proxy.originalDelegate = existing.originalDelegate }
+            else { proxy.originalDelegate = window.delegate }
+            window.delegate = proxy
+        }
+
+        func uninstall() {
+            generation &+= 1
+            if let window = protectedWindow, window.delegate === proxy { window.delegate = proxy.originalDelegate }
+            protectedWindow = nil
+            proxy.originalDelegate = nil
+        }
+    }
+}
+
+struct MenuBarTask: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+
+    var menuTitle: String {
+        let singleLine = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return singleLine.count > 36 ? String(singleLine.prefix(35)) + "…" : singleLine
+    }
+
+    static func items(in data: LedgerData, relativeTo today: Date, firstWeekday: Int, calendar: Calendar = .current) -> [Self] {
+        let tasks = TaskListPolicy.tasks(in: .thisWeek, data: data, relativeTo: today, firstWeekday: firstWeekday, calendar: calendar)
+        return TaskListPolicy.visibleTasks(tasks, projects: data.projects, scope: .thisWeek, filter: .thisWeek,
+                                          search: "", relativeTo: today, firstWeekday: firstWeekday, calendar: calendar)
+            .map { Self(id: $0.id, title: $0.title) }
+    }
+}
+
 private struct MenuContent: View {
     let store: WorkStore
+    let onOpenTask: (UUID) -> Void
     @AppStorage("appLanguage") private var language: AppLanguage = .system
-    @State private var pendingCount: Int
+    @AppStorage("weekStart") private var weekStart = 5
+    @AppStorage("runInMenuBar") private var runInMenuBar = true
+    @State private var today = Calendar.current.startOfDay(for: Date())
+    @State private var tasks: [MenuBarTask]
     @Environment(\.openWindow) var openWindow
 
-    init(store: WorkStore) {
-        self.store = store
-        _pendingCount = State(initialValue: store.data.tasks.filter { $0.completedAt == nil }.count)
+    init(store: WorkStore, onOpenTask: @escaping (UUID) -> Void) {
+        self.store = store; self.onOpenTask = onOpenTask
+        _tasks = State(initialValue: MenuBarTask.items(in: store.data, relativeTo: Date(), firstWeekday: UserDefaults.standard.object(forKey: "weekStart") as? Int ?? 5))
     }
 
     var body: some View {
         Group {
-            Button(L("打开工作清单")) { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-            Text(L("待办 \(pendingCount) 项"))
+            Button(L("打开工作清单"), action: openMainWindow)
+            Divider()
+            Text(L("本周待办 \(tasks.count) 项"))
+            if tasks.isEmpty {
+                Text(L("本周没有待办任务"))
+            } else {
+                ForEach(tasks) { task in
+                    Button {
+                        onOpenTask(task.id)
+                        openMainWindow()
+                    } label: {
+                        Text(verbatim: task.menuTitle).lineLimit(1).truncationMode(.tail)
+                    }
+                    .help(task.title)
+                    .accessibilityLabel(task.title)
+                }
+            }
             Divider()
             SettingsLink { Text(L("设置…")) }
+            Button(L("隐藏菜单栏图标")) { runInMenuBar = false }
             Button(L("退出工作清单")) { NSApp.terminate(nil) }.keyboardShortcut("q")
         }
         .environment(\.locale, language.locale)
-        .onReceive(store.$data.map { $0.tasks.filter { $0.completedAt == nil }.count }.removeDuplicates()) { count in
-            if pendingCount != count { pendingCount = count }
+        .onReceive(store.$data.map { MenuBarTask.items(in: $0, relativeTo: today, firstWeekday: weekStart) }.removeDuplicates()) { next in
+            if tasks != next { tasks = next }
         }
+        .onChange(of: weekStart) { _, _ in refreshTasks() }
+        .onAppear { refreshTasks() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in refreshTasks() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).receive(on: RunLoop.main)) { _ in refreshTasks() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshTasks() }
+    }
+
+    private func refreshTasks() {
+        today = Calendar.current.startOfDay(for: Date())
+        let next = MenuBarTask.items(in: store.data, relativeTo: today, firstWeekday: weekStart)
+        if tasks != next { tasks = next }
+    }
+
+    private func openMainWindow() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

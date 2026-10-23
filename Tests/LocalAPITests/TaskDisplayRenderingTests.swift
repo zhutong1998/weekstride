@@ -42,6 +42,9 @@ final class TaskDisplayRenderingTests: XCTestCase {
                             dueAt: today.addingTimeInterval(Double(index + 1) * 86400), plannedAt: today, planGranularity: .week)
             try store.saveTask(copy)
         }
+        let completedWeek = Calendar.current.date(byAdding: .day, value: -21, to: today)!
+        try store.saveTask(WorkTask(projectID: project.id, title: "Archived completion must not add a planning tab",
+                                    completedAt: completedWeek, plannedAt: completedWeek, planGranularity: .week))
         let services = AppServices(store: store, recoveryMode: true)
         let target = URL(fileURLWithPath: output, isDirectory: true)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)

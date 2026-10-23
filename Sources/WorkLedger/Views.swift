@@ -70,6 +70,59 @@ final class TaskDraftStorage {
     }
 }
 
+@MainActor
+final class TaskEditingRegistry {
+    private var states: [UUID: TaskCardEditingState] = [:]
+    private var observer: NSObjectProtocol?
+    private var terminationObserver: NSObjectProtocol?
+
+    init() {
+        observer = NotificationCenter.default.addObserver(forName: finishTaskEdits, object: nil, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let request = note.object as? TaskEditingExitRequest else { return }
+                self?.finish(request)
+            }
+        }
+        terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.finish(TaskEditingExitRequest()) }
+        }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
+    }
+
+    private func finish(_ request: TaskEditingExitRequest) {
+        for (id, state) in Array(states) where request.targets(id) {
+            if let finish = state.finishHandler, !finish() { request.fail(for: id) }
+        }
+    }
+
+    func state(for task: WorkTask, isDraft: Bool, initiallyExpanded: Bool) -> TaskCardEditingState {
+        if let state = states[task.id] { return state }
+        let state = TaskCardEditingState(task: task, isDraft: isDraft, initiallyExpanded: initiallyExpanded)
+        states[task.id] = state
+        return state
+    }
+
+    func retainTasks(_ ids: Set<UUID>) {
+        for id in states.keys.filter({ !ids.contains($0) }) {
+            guard let state = states.removeValue(forKey: id) else { continue }
+            state.finishHandler = nil; state.discardFields()
+        }
+    }
+
+    func removeAll() {
+        for state in states.values { state.finishHandler = nil; state.discardFields() }
+        states.removeAll()
+    }
+
+    func resetExpansion() {
+        for state in states.values { state.expandedOverride = nil }
+    }
+}
+
 enum TaskListRow: Identifiable {
     case week(TaskPlanFilter, Int, String)
     case project(Project?, Int, String)
@@ -104,6 +157,7 @@ struct RootView: View {
     @State private var search = ""
     @State private var showNewProject = false
     @State private var draftStorage = TaskDraftStorage()
+    @State private var editingRegistry = TaskEditingRegistry()
     @State private var draftID: UUID?
     // Consumed when the saved card appears, independently of the next draft's highlight.
     @State private var savedDraftIDs: Set<UUID> = []
@@ -116,12 +170,14 @@ struct RootView: View {
     @State private var customEnd = Date()
     @State private var highlightedTaskID: UUID?
     @State private var taskReveal: TaskReveal?
+    @State private var centeredListRevealID: UUID?
     @State private var operationNotice: TaskOperationNotice?
     @State private var planningToday = Calendar.current.startOfDay(for: Date())
     @State private var planFilter: TaskPlanFilter = .thisWeek
     @State private var listUpdateTask: Task<Void, Never>?
     @State private var pendingListStructure: TaskListStructure?
     @State private var listSlide: TaskListSlide?
+    @State private var listViewport = TaskListViewportState()
     @FocusState private var sidebarFocus: SidebarItem?
     @State private var searchFocused = false
 
@@ -164,21 +220,20 @@ struct RootView: View {
     private func setListLocation(_ scope: SidebarItem?, filter: TaskPlanFilter) {
         guard TaskListPageID(scope: scope ?? .all, filter: filter) != listPageID else { return }
         let destination = TaskViewContext(scope: scope ?? .all, filter: filter, search: "")
+        let setting = scope == selection ? displaySetting : TaskDisplayPreferences().setting(
+            for: (scope ?? .all).planFilterPreferenceKey, defaultColumns: defaultColumns, defaultDetails: defaultDetails)
         let slide = reduceMotion || listEffect == .none ? nil : TaskListSlide.between(currentContext, destination, projectIDs: listStructure.projects.map(\.id))
-        var transaction = Transaction(animation: slide == nil ? nil : .easeInOut(duration: TaskListEffect.duration))
-        transaction.disablesAnimations = reduceMotion
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        if slide != nil { listViewport.prepareNavigation() }
         withTransaction(transaction) {
             listSlide = slide
+            if setting.details != displaySetting.details { editingRegistry.resetExpansion() }
+            displaySetting = setting
+            topVisibleTask = nil
             selection = scope
             planFilter = filter
         }
-    }
-
-    private func listTransition(in viewport: CGSize) -> AnyTransition {
-        guard !reduceMotion, listEffect != .none else { return .identity }
-        let identity = TaskListPageMotion(progress: 0, slide: $listSlide, effect: $listEffect, viewport: viewport)
-        return .asymmetric(insertion: .modifier(active: TaskListPageMotion(progress: 1, slide: $listSlide, effect: $listEffect, viewport: viewport), identity: identity),
-                           removal: .modifier(active: TaskListPageMotion(progress: -1, slide: $listSlide, effect: $listEffect, viewport: viewport), identity: identity))
     }
 
     private func validPlanFilter(_ filter: TaskPlanFilter) -> TaskPlanFilter {
@@ -333,6 +388,7 @@ struct RootView: View {
                                 }
                             }
                             }.buttonStyle(.plain).listRowBackground(Color.clear)
+                                .accessibilityIdentifier("scope.\(SidebarItem.project(project.id).planFilterPreferenceKey)")
                                 .focused($sidebarFocus, equals: .project(project.id))
                                 .accessibilityAddTraits(selection == .project(project.id) ? .isSelected : [])
                                 .help(L("查看「\(project.name)」的未完成任务"))
@@ -382,22 +438,22 @@ struct RootView: View {
             }.navigationSplitViewColumnWidth(min: 205, ideal: 225, max: 300)
         } detail: {
             VStack(spacing: 0) {
-                if isHistory {
-                    periodControls.padding(.top, 18)
-                    Divider()
-                } else if (selection != .thisWeek && !isTimeSensitive) || dragState.taskID != nil {
-                    planningFilterControls
-                        .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, 2)
-                }
-                GeometryReader { viewport in
-                    ZStack {
-                        ForEach([pageID], id: \.self) { _ in
-                            // The whole page owns its transition; child transitions must not replace it.
-                            ZStack {
-                                if visible.isEmpty && !hasVisibleDraft {
-                                    emptyState.frame(maxWidth: .infinity, maxHeight: .infinity)
-                                } else {
-                                    ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    if isHistory {
+                        periodControls.padding(.top, 18)
+                        Divider()
+                    } else if (selection != .thisWeek && !isTimeSensitive) || dragState.taskID != nil {
+                        planningFilterControls
+                            .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, 2)
+                    }
+                    GeometryReader { viewport in
+                        TaskListViewport(state: listViewport, page: pageID, slide: listSlide, effect: listEffect, reduceMotion: reduceMotion, resetScroll: taskReveal == nil) {
+                            ScrollViewReader { proxy in
+                                let singleColumn = displaySetting.columns == .one
+                                Group {
+                                    if singleColumn {
+                                        singleColumnTasks(rows: rows, width: viewport.size.width, history: pageIsHistory, timeSensitive: pageIsTimeSensitive, page: pageID, proxy: proxy)
+                                    } else {
                                         ScrollView {
                                             VStack(alignment: .leading, spacing: 4) {
                                                 if let draft = visibleDraft {
@@ -433,32 +489,39 @@ struct RootView: View {
                                         }
                                         .taskListScrollAnchor()
                                         .scrollPosition(id: Binding(get: { topVisibleTask }, set: { if pageID == listPageID { topVisibleTask = $0 } }), anchor: .top)
-                                        .onChange(of: taskReveal, initial: true) { _, request in
-                                            guard let request, pageID == listPageID else { return }
-                                            DispatchQueue.main.async {
-                                                guard pageID == listPageID, taskReveal?.id == request.id else { return }
-                                                if draftID == request.taskID { proxy.scrollTo("taskListTop", anchor: .top) }
-                                                else {
-                                                    withAnimation(reduceMotion || !request.animatedScroll ? nil : .easeInOut(duration: 0.22)) {
-                                                        proxy.scrollTo(request.taskID, anchor: .center)
-                                                    }
-                                                }
-                                            }
+                                    }
+                                }
+                                .modifier(TaskListScrollActivity())
+                                .overlay {
+                                    if visible.isEmpty && !hasVisibleDraft {
+                                        emptyState.frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    }
+                                }
+                                .task(id: taskReveal) {
+                                    guard let request = taskReveal else { return }
+                                    await Task.yield()
+                                    guard !Task.isCancelled, pageID == listPageID, taskReveal?.id == request.id else { return }
+                                    if singleColumn {
+                                        withAnimation(reduceMotion || !request.animatedScroll ? nil : .easeInOut(duration: 0.22)) {
+                                            proxy.scrollTo("task:\(request.taskID)", anchor: draftID == request.taskID ? .top : .center)
+                                        }
+                                    } else if draftID == request.taskID { proxy.scrollTo("taskListTop", anchor: .top) }
+                                    else {
+                                        withAnimation(reduceMotion || !request.animatedScroll ? nil : .easeInOut(duration: 0.22)) {
+                                            proxy.scrollTo(request.taskID, anchor: .center)
                                         }
                                     }
                                 }
                             }
                             .frame(width: viewport.size.width, height: viewport.size.height)
                             .background(Color(nsColor: .windowBackgroundColor))
-                            .modifier(TaskListPageActivity(page: pageID, activePage: Binding(get: { listPageID }, set: { _ in })))
-                            .transition(listTransition(in: viewport.size))
-                            .zIndex(1)
                         }
+                        .frame(width: viewport.size.width, height: viewport.size.height)
                     }
-                    .frame(width: viewport.size.width, height: viewport.size.height)
+                    .clipped()
                 }
-                .clipped()
-                .modifier(TaskListInteraction(page: pageID, animated: !reduceMotion && listSlide != nil))
+                .background(TaskTabSwipeBoundary(enabled: !isHistory && !isTimeSensitive && selection != .thisWeek && dragState.taskID == nil,
+                                                 onSwipe: swipePlanFilter))
                 operationBar
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: operationNotice != nil)
             }.background(Color(nsColor: .windowBackgroundColor))
@@ -472,7 +535,6 @@ struct RootView: View {
         .environment(\.taskPlanningDay, planningToday)
         .environment(\.locale, language.locale)
         .onAppear(perform: loadDisplaySetting)
-        .onChange(of: selection) { _, _ in topVisibleTask = nil; loadDisplaySetting() }
         .onChange(of: defaultColumns) { _, _ in loadDisplaySetting() }
         .onChange(of: defaultDetails) { _, _ in loadDisplaySetting() }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("WorkLedger.viewPreferencesChanged"))) { note in
@@ -482,10 +544,11 @@ struct RootView: View {
             if filter != planFilter { setListLocation(selection, filter: filter) }
         }
         .sheet(isPresented: $showNewProject) { ProjectEditor() }
-        .onReceive(TaskListStructure.changes(in: store, search: search)) { next in
-            receiveListStructure(next)
+        .onReceive(store.$data) { data in
+            receiveListStructure(TaskListStructure(data: data, search: search))
         }
         .onChange(of: currentContext) { _, _ in
+            guard pendingListStructure != nil else { return }
             listUpdateTask?.cancel(); listUpdateTask = nil; pendingListStructure = nil
             let next = TaskListStructure(data: store.data, search: search)
             if listStructure != next { listStructure = next }
@@ -495,7 +558,7 @@ struct RootView: View {
             listUpdateTask?.cancel(); listUpdateTask = nil; pendingListStructure = nil
             listStructure = TaskListStructure(data: store.data, search: search)
         }
-        .onDisappear { listUpdateTask?.cancel() }
+        .onDisappear { listUpdateTask?.cancel(); _ = finishCurrentEdits(); editingRegistry.removeAll() }
         .onChange(of: search) { _, query in
             let next = TaskListStructure(data: store.data, search: query)
             if listStructure != next { listStructure = next }
@@ -518,6 +581,14 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("WorkLedger.showAll"))) { _ in
             selectScope(.all, filter: .all); search = ""
         }
+        #if WORKLEDGER_PERFORMANCE_TESTS
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("WorkLedger.testSelectScope"))) { notification in
+            if let scope = notification.object as? SidebarItem { selectScope(scope) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("WorkLedger.testSelectPlanFilter"))) { notification in
+            if let filter = notification.object as? TaskPlanFilter { selectPlanFilter(filter) }
+        }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("WorkLedger.openTask"))) { notification in
             guard let string = notification.object as? String, let id = UUID(uuidString: string) else { return }
             openTask(id)
@@ -545,6 +616,7 @@ struct RootView: View {
         if let id = draftID, next.removesTask(id, comparedTo: pendingListStructure ?? listStructure) {
             draftTask = nil
         }
+        editingRegistry.retainTasks(Set(store.data.tasks.map(\.id)).union(draftID.map { [$0] } ?? []))
         // A publisher can replay during a render; the same result must not restart the feedback timer.
         guard pendingListStructure != next else { return }
         if listStructure == next {
@@ -654,6 +726,7 @@ struct RootView: View {
             }
         }
         }.buttonStyle(.plain).listRowBackground(Color.clear)
+            .accessibilityIdentifier("scope.\(item.planFilterPreferenceKey)")
             .focused($sidebarFocus, equals: item)
             .accessibilityAddTraits(selection == item ? .isSelected : [])
             .help(L("查看\(title)"))
@@ -686,6 +759,10 @@ struct RootView: View {
     }
 
     private func taskCard(_ task: WorkTask, project: Project?, history: Bool, timeSensitive: Bool) -> some View {
+        taskCardContent(task, project: project, history: history, timeSensitive: timeSensitive).id(task.id)
+    }
+
+    private func taskCardContent(_ task: WorkTask, project: Project?, history: Bool, timeSensitive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if timeSensitive {
                 HStack(spacing: 5) {
@@ -697,6 +774,7 @@ struct RootView: View {
             ObservedTaskCard(store: store, task: task, project: project, isHistory: history || task.completedAt != nil, isNavigationTarget: highlightedTaskID == task.id,
                      initiallyExpanded: savedDraftIDs.contains(task.id),
                      draft: draftID == task.id ? draftStorage : nil,
+                     editingState: editingRegistry.state(for: task, isDraft: draftID == task.id && !store.data.tasks.contains { $0.id == task.id }, initiallyExpanded: savedDraftIDs.contains(task.id)),
                      onCreated: {
                          guard draftTask?.id == task.id else { return }
                          let origin = currentContext
@@ -715,7 +793,40 @@ struct RootView: View {
                      },
                      onCancel: { if draftTask?.id == task.id { draftTask = nil } },
                      onInitialExpansionConsumed: { _ = savedDraftIDs.remove(task.id) })
-        }.id(task.id)
+        }
+    }
+
+    private func singleColumnTasks(rows: [TaskListRow], width: CGFloat, history: Bool, timeSensitive: Bool, page: TaskListPageID, proxy: ScrollViewProxy) -> some View {
+        List(rows) { row in
+            VStack(alignment: .leading, spacing: 0) {
+                if case .task(let task, let project) = row {
+                    taskCardContent(task, project: project, history: history, timeSensitive: timeSensitive)
+                } else {
+                    taskHeading(row)
+                }
+            }
+            .id(row.id)
+            .onAppear {
+                guard let request = taskReveal, row.id == "task:\(request.taskID)", centeredListRevealID != request.id else { return }
+                // The first jump realizes the row; recenter after its actual height is measured.
+                DispatchQueue.main.async {
+                    guard page == listPageID, taskReveal?.id == request.id, centeredListRevealID != request.id else { return }
+                    centeredListRevealID = request.id
+                    proxy.scrollTo(row.id, anchor: draftID == request.taskID ? .top : .center)
+                }
+            }
+            .padding(.bottom, 4)
+            .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 28))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.taskDetailsMode, displaySetting.details)
+        .environment(\.taskListPreservesEditing, true)
+        .environment(\.compactTaskPlan, width - 56 < 650 * textSize.scale)
+        .contentMargins(.top, history ? 14 : 4, for: .scrollContent)
+        .contentMargins(.bottom, 28, for: .scrollContent)
     }
 
     private var currentContext: TaskViewContext {
@@ -726,6 +837,27 @@ struct RootView: View {
     private func finishCurrentEdits() -> Bool {
         let request = TaskEditingExitRequest()
         NotificationCenter.default.post(name: finishTaskEdits, object: request)
+        if let id = request.failedTaskID {
+            clearSearchFocus()
+            if !search.isEmpty {
+                search = ""
+                listStructure = TaskListStructure(data: store.data, search: "")
+            }
+            if let task = store.data.tasks.first(where: { $0.id == id }) ?? draftTask {
+                if visibleDraft?.id != id && !visibleTasks.contains(where: { $0.id == id }) {
+                    if task.completedAt != nil {
+                        historyRange = .all
+                        setListLocation(.completed, filter: .all)
+                    } else {
+                        setListLocation(task.projectID.map(SidebarItem.project) ?? .all,
+                                        filter: TaskPlanFilter(task: task, relativeTo: planningToday, firstWeekday: weekStart))
+                    }
+                }
+                revealTask(id, animatedScroll: false)
+                operationNotice = TaskOperationNotice(taskID: id, title: task.title,
+                    message: L("请先修正正在编辑的内容，再继续操作。"), symbol: "exclamationmark.circle")
+            }
+        }
         return !request.failed
     }
 
@@ -788,6 +920,11 @@ struct RootView: View {
     }
 
     private func openTask(_ id: UUID) {
+        if draftTask?.id == id {
+            _ = finishCurrentEdits()
+            revealTask(id, animatedScroll: false)
+            return
+        }
         guard let task = store.data.tasks.first(where: { $0.id == id }) else {
             error = L("任务已不存在。"); return
         }
@@ -921,6 +1058,9 @@ struct RootView: View {
                 }
             }
         } actions: {
+            if !isHistory && !isTimeSensitive && selection != .thisWeek && planFilter != .all {
+                Button(L("全部任务")) { selectPlanFilter(.all) }.nativeActionButton()
+            }
             if !isHistory && search.isEmpty {
                 Button(L("新建任务"), action: createTask).nativeActionButton(prominent: true)
                     .help(L("填写任务信息，回车保存；明细和备注可用 Shift＋回车换行"))
@@ -930,37 +1070,42 @@ struct RootView: View {
 
     private var planningFilterControls: some View {
         let tasks = planningTasks.filter { listStructure.matchingTaskIDs?.contains($0.id) ?? true }
-        let completed = completedTasks.filter { listStructure.matchingTaskIDs?.contains($0.id) ?? true }
-        let groups = TaskPlanFilter.grouped(for: tasks + completed, relativeTo: planningToday, firstWeekday: weekStart)
-        let counts = Dictionary(uniqueKeysWithValues: groups.map { ($0.filter, $0.tasks.filter { $0.completedAt == nil }.count) })
+        let groups = TaskPlanFilter.grouped(for: tasks, relativeTo: planningToday, firstWeekday: weekStart)
+        let counts = Dictionary(uniqueKeysWithValues: groups.map { ($0.filter, $0.tasks.count) })
         let filters: [TaskPlanFilter] = dragState.taskID == nil ? (groups.isEmpty ? [] : [.all] + groups.map(\.filter))
-            : TaskPlanFilter.options(for: planningTasks + completedTasks, relativeTo: planningToday, firstWeekday: weekStart)
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                planningFilterTabs(filters, counts: counts, totalCount: tasks.count)
-            }
-            .scrollIndicators(.hidden)
-            .onChange(of: selection) { _, _ in proxy.scrollTo(TaskPlanFilter.all, anchor: .leading) }
-            .onChange(of: planFilter) { _, filter in
-                let anchor: UnitPoint = filter == TaskPlanFilter.all || filter == TaskPlanFilter.thisWeek ? .leading : .center
-                proxy.scrollTo(filter, anchor: anchor)
-            }
-        }
-        .frame(height: filters.isEmpty ? 0 : 32)
+            : TaskPlanFilter.options(for: planningTasks, relativeTo: planningToday, firstWeekday: weekStart)
+        return planningFilterTabs(filters, counts: counts, totalCount: tasks.count)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func planningFilterTabs(_ filters: [TaskPlanFilter], counts: [TaskPlanFilter: Int], totalCount: Int) -> some View {
-        HStack(spacing: 6) {
+        TaskFlowLayout(spacing: 6, rowSpacing: 6) {
             ForEach(filters) { filter in
                 planningFilterTab(filter, count: filter == .all ? totalCount : (counts[filter] ?? 0))
                     .id(filter)
             }
-        }.padding(.vertical, 2)
+        }.padding(.vertical, filters.isEmpty ? 0 : 2)
     }
 
-    private func planningFilterTab(_ filter: TaskPlanFilter, count: Int) -> PlanningDropTab {
+    private func planningFilterTab(_ filter: TaskPlanFilter, count: Int) -> some View {
         PlanningDropTab(title: planFilterTitle(filter), count: count, selected: planFilter == filter,
                         action: { selectPlanFilter(filter) }, onDrop: { moveTask($0, toPlan: filter) })
+            .accessibilityIdentifier("plan.\(filter)")
+    }
+
+    private func swipePlanFilter(_ direction: TaskTabSwipeDirection) {
+        let tasks = planningTasks.filter { listStructure.matchingTaskIDs?.contains($0.id) ?? true }
+        let groups = TaskPlanFilter.grouped(for: tasks, relativeTo: planningToday, firstWeekday: weekStart)
+        let filters: [TaskPlanFilter] = groups.isEmpty ? [] : [.all] + groups.map(\.filter)
+        guard filters.count > 1 else { return }
+        guard let index = filters.firstIndex(of: planFilter) else {
+            selectPlanFilter(.all)
+            return
+        }
+        let destination = index + (direction == .next ? 1 : -1)
+        guard filters.indices.contains(destination) else { return }
+        selectPlanFilter(filters[destination])
     }
 
     private func selectPlanFilter(_ filter: TaskPlanFilter) {
@@ -973,13 +1118,15 @@ struct RootView: View {
     private func loadDisplaySetting() {
         let setting = TaskDisplayPreferences().setting(for: (selection ?? .all).planFilterPreferenceKey, defaultColumns: defaultColumns, defaultDetails: defaultDetails)
         guard setting != displaySetting else { return }
-        guard setting.details == displaySetting.details || finishCurrentEdits() else { return }
+        guard finishCurrentEdits() else { return }
+        if displaySetting.details != setting.details { editingRegistry.resetExpansion() }
         displaySetting = setting
     }
 
     private func setDisplaySetting(_ setting: TaskDisplaySetting) {
         guard finishCurrentEdits() else { return }
         TaskDisplayPreferences().save(setting, for: (selection ?? .all).planFilterPreferenceKey)
+        if displaySetting.details != setting.details { editingRegistry.resetExpansion() }
         displaySetting = setting
     }
 
@@ -999,6 +1146,7 @@ struct RootView: View {
             }
         } label: { Image(systemName: "rectangle.grid.2x2") }
         .id(language.localeIdentifier)
+        .disabled(dragState.taskID != nil)
         .help(L("任务显示：列数与详情模式，当前项目独立记忆"))
         .accessibilityLabel(L("任务显示方式"))
     }
@@ -1097,9 +1245,11 @@ private struct NativeTaskSearchField: NSViewRepresentable {
 
     func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.parent = self
-        field.placeholderString = placeholder
-        field.setAccessibilityLabel(placeholder)
-        field.font = .systemFont(ofSize: 12 * textScale)
+        // Unchanged native setters can restart toolbar constraint layout during menu tracking.
+        if field.placeholderString != placeholder { field.placeholderString = placeholder }
+        if field.accessibilityLabel() != placeholder { field.setAccessibilityLabel(placeholder) }
+        let font = NSFont.systemFont(ofSize: 12 * textScale)
+        if field.font != font { field.font = font }
         if field.stringValue != text { field.stringValue = text }
         let hasFocus = field.currentEditor() != nil || field.window?.firstResponder === field
         guard focused != hasFocus, let window = field.window else { return }
@@ -1133,8 +1283,10 @@ private struct NativeTaskSearchField: NSViewRepresentable {
 
 private struct ThisWeekBadge: View {
     let count: Int
+    @Environment(\.locale) private var locale
 
     var body: some View {
+        let _ = locale.identifier
         if count > 0 {
             Text("\(count)").appFont(.caption.weight(.bold).monospacedDigit())
                 .lineLimit(1).minimumScaleFactor(0.6)
@@ -1146,49 +1298,48 @@ private struct ThisWeekBadge: View {
     }
 }
 
-private struct TaskListPageActivity: ViewModifier {
-    let page: TaskListPageID
-    @Binding var activePage: TaskListPageID
+@Observable
+final class TaskListScrollState {
+    var scrolling = false
+}
 
-    func body(content: Content) -> some View {
-        content.allowsHitTesting(page == activePage).accessibilityHidden(page != activePage)
+private struct TaskListPreservesEditingKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct TaskListScrollingKey: EnvironmentKey {
+    static let defaultValue = TaskListScrollState()
+}
+
+extension EnvironmentValues {
+    var taskListPreservesEditing: Bool {
+        get { self[TaskListPreservesEditingKey.self] }
+        set { self[TaskListPreservesEditingKey.self] = newValue }
+    }
+
+    var taskListScrollState: TaskListScrollState {
+        get { self[TaskListScrollingKey.self] }
+        set { self[TaskListScrollingKey.self] = newValue }
     }
 }
 
-private struct TaskListPageMotion: ViewModifier, Animatable {
-    var progress: CGFloat
-    // Departing pages need the current navigation direction, including the very first switch.
-    @Binding var slide: TaskListSlide?
-    @Binding var effect: TaskListEffect
-    let viewport: CGSize
+private struct TaskListScrollActivity: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var activity = TaskListScrollState()
 
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let state = effect.presentation(at: progress, slide: slide, viewport: viewport)
-        return content
-            .scaleEffect(state.scale)
-            .offset(x: state.offset.width, y: state.offset.height)
-            .opacity(state.opacity)
-    }
-}
-
-private struct TaskListInteraction: ViewModifier {
-    let page: TaskListPageID
-    let animated: Bool
-    @State private var transitioning = false
-
-    func body(content: Content) -> some View {
-        content.allowsHitTesting(!animated || !transitioning)
-            .task(id: page) {
-                guard animated else { transitioning = false; return }
-                transitioning = true
-                do { try await Task.sleep(for: .seconds(TaskListEffect.duration)) } catch { return }
-                transitioning = false
-            }
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content
+                .environment(\.taskListScrollState, activity)
+                .onScrollPhaseChange { _, phase in
+                    let next = phase != .idle
+                    guard next != activity.scrolling else { return }
+                    // Moving cards must not expand under the pointer; restore hover once scrolling stops.
+                    withAnimation(next || reduceMotion ? nil : .easeOut(duration: 0.18)) { activity.scrolling = next }
+                }
+        } else {
+            content
+        }
     }
 }
 
@@ -1346,7 +1497,7 @@ private struct ScopeMenu: View {
                 }.animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: active)
         }
         .buttonStyle(.plain).fixedSize().focusable(interactions: .edit).focusEffectDisabled()
-        .focused($focused).accessibilityFocused($accessibilityFocused)
+        .focused($focused).taskAccessibilityFocused($accessibilityFocused)
         .onHover { hovered = $0 }
         .accessibilityLabel(L("\(title)，\(weekCount > 0 ? L("本周 \(weekCount) 项，") : "")\(count > 0 ? L("\(count) 项任务，") : "")切换项目"))
         .help(L("点击切换项目或工作台分类"))
@@ -1465,7 +1616,7 @@ struct HoverGlassButton<Label: View>: View {
         }
         .buttonStyle(.plain)
         .focused($focused)
-        .accessibilityFocused($accessibilityFocused)
+        .taskAccessibilityFocused($accessibilityFocused)
         .onHover { hovered = taskHoverEnabled && $0 }
         .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovered = false } }
     }

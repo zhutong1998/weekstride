@@ -13,6 +13,7 @@ struct PreferencesView: View {
     @AppStorage("appTimeFormat") private var timeFormat: AppTimeFormat = .system
     @AppStorage("taskColumns") private var columns: TaskColumnMode = .one
     @AppStorage("taskDetails") private var details: TaskDetailsMode = .expanded
+    @AppStorage("runInMenuBar") private var runInMenuBar = true
     @State private var selection: Page? = .general
     @State private var showToken = false
     @State private var confirmRotate = false
@@ -97,7 +98,8 @@ struct PreferencesView: View {
                     Text(services.launchAtLoginStatus).appFont(.caption).foregroundStyle(.secondary)
                 }
                 Button(L("打开系统登录项")) { services.openLoginItemSettings() }
-                Text(L("关闭主窗口后，工作清单继续在菜单栏运行。"))
+                Toggle(L("显示菜单栏图标"), isOn: $runInMenuBar)
+                Text(L("菜单栏显示本周待办任务。隐藏图标后，仍可从 Dock 打开应用并在此重新开启。"))
                     .appFont(.caption).foregroundStyle(.secondary)
             }
             Section(L("工作周期")) {
@@ -216,6 +218,8 @@ struct PreferencesView: View {
                     .appFont(.caption).foregroundStyle(.secondary)
             }
             Section(L("使用说明")) {
+                Link(L("打开本地使用说明"), destination: URL(string: "http://127.0.0.1:18743/")!)
+                    .disabled(!services.apiEnabled)
                 Text(L("先开启服务并复制令牌，再查询任务 ID，最后调用完成接口。主任务和步骤都支持指定完成日期，重复请求不会重复生成循环任务。"))
                 Button(showAPIHelp ? L("收起接口说明") : L("查看接口说明")) { showAPIHelp.toggle() }
                 if showAPIHelp {

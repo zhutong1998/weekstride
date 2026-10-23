@@ -41,7 +41,7 @@ enum LocalAPISettingsRoutes {
         case "/v1/settings/status":
             guard request.head.method == "GET" else { throw methodNotAllowed() }
             try requireEmptyBody(request)
-            return try .json(Status(services: services))
+            return try .json(Status(defaults: defaults, services: services))
         case "/v1/settings/api/disable", "/v1/settings/api/rotate-token":
             guard request.head.method == "POST" else { throw methodNotAllowed() }
             _ = try LocalAPIJSON(request, allowed: [], allowEmpty: true)
@@ -58,7 +58,7 @@ enum LocalAPISettingsRoutes {
     }
 
     private static func updateSettings(_ request: LocalAPIRequest, defaults: UserDefaults, services: AppServices?) throws {
-        let allowed = Set(enumValues.keys).union(["weekStart", "remindersEnabled", "launchAtLogin"])
+        let allowed = Set(enumValues.keys).union(["weekStart", "remindersEnabled", "launchAtLogin", "runInMenuBar"])
         let json = try LocalAPIJSON(request, allowed: allowed)
         guard !json.raw.isEmpty else { throw invalid("Include at least one setting to change.") }
         var changes: [String: Any] = [:]
@@ -74,6 +74,7 @@ enum LocalAPISettingsRoutes {
         }
         let reminders = try json.bool("remindersEnabled")
         let login = try json.bool("launchAtLogin")
+        if let value = try json.bool("runInMenuBar") { changes["runInMenuBar"] = value }
         if reminders != nil || login != nil {
             guard services != nil else { throw invalid("Changing reminders or login items requires the running application services.") }
         }
@@ -169,6 +170,7 @@ enum LocalAPISettingsRoutes {
         let taskDetails: String
         let taskListEffect: String
         let remindersEnabled: Bool
+        let runInMenuBar: Bool
         let status: Status
 
         @MainActor init(defaults: UserDefaults, services: AppServices?) {
@@ -181,7 +183,8 @@ enum LocalAPISettingsRoutes {
             taskDetails = (TaskDetailsMode(rawValue: defaults.string(forKey: "taskDetails") ?? "") ?? .expanded).rawValue
             taskListEffect = (TaskListEffect(rawValue: defaults.string(forKey: "taskListEffect") ?? "") ?? .slide).rawValue
             remindersEnabled = services?.remindersEnabled ?? (defaults.object(forKey: "remindersEnabled") as? Bool ?? true)
-            status = Status(services: services)
+            runInMenuBar = defaults.object(forKey: "runInMenuBar") as? Bool ?? true
+            status = Status(defaults: defaults, services: services)
         }
     }
 
@@ -192,7 +195,7 @@ enum LocalAPISettingsRoutes {
         let launchAtLoginStatus: String?
         let notificationAuthorization: String
         let isBackingUp: Bool?
-        let runsInMenuBar = true
+        let runsInMenuBar: Bool
         let notificationPermissionRequiresUI = true
         let testNotificationRequiresUI = true
         let canChangeReminders: Bool
@@ -200,7 +203,8 @@ enum LocalAPISettingsRoutes {
         let canDisableAPI: Bool
         let canRotateAPIToken: Bool
 
-        @MainActor init(services: AppServices?) {
+        @MainActor init(defaults: UserDefaults, services: AppServices?) {
+            runsInMenuBar = defaults.object(forKey: "runInMenuBar") as? Bool ?? true
             servicesAvailable = services != nil
             apiEnabled = services?.apiEnabled
             launchAtLoginStatus = services?.launchAtLoginRegistrationStatus

@@ -104,6 +104,10 @@ The next due date and reminder are calculated from the recurrence rule. Check th
 
 Drag a task to a sidebar project to move it, or to All tasks to remove its project assignment. Drop it onto a week tab to reschedule it. Moving a task or changing its plan preserves its text, other dates, steps, and attachments.
 
+Week tabs wrap onto additional rows when needed. With the pointer over the task list or its tabs, swipe left or right with two fingers on a trackpad, or scroll horizontally with a supported mouse, to move between the visible tabs. Each gesture moves one tab and stops at either end. Text editing, task dragging, and modal dialogs take priority over tab gestures.
+
+Hovering reveals the card's action buttons without changing its height or moving the tasks below it. Unfinished text remains available as you scroll away and return; quitting or closing the window saves valid input and brings you back to any field that still needs correction.
+
 ## Appearance and settings
 
 Settings cover general preferences, appearance and motion, reminders, the local API, data and backups, and app information.
@@ -135,7 +139,7 @@ A `.workledgerbackup` folder contains task data and referenced attachments, excl
 
 Data and backups are not additionally encrypted; they rely on your macOS account permissions and disk protection. Removing an attachment reference currently leaves the stored file in place to protect history and recurring tasks. Exported backups include only files still referenced by tasks.
 
-The local API is off by default and listens only on `127.0.0.1:18743`. The app must be running; closing its window can leave it running in the menu bar, while quitting stops the API. It supports reading and changing work, uploading and downloading task attachments, managing backups, restoring work data, and changing application or project-view settings. It has no arbitrary filesystem access. API bootstrap and macOS notification permissions still require the app UI. See the [local API guide](docs/API.md) for discovery, examples, validation rules, and size limits.
+The local API is off by default and listens only on `127.0.0.1:18743`. The app must be running; closing its window can leave it running in the menu bar, while quitting stops the API. It supports reading and changing work, uploading and downloading task attachments, managing backups, restoring work data, and changing application or project-view settings. It has no arbitrary filesystem access. API bootstrap and macOS notification permissions still require the app UI. Once enabled, open `http://127.0.0.1:18743/` in a browser for a built-in English guide with curl examples and route reference; this static help needs no token, while all data and control endpoints remain authenticated. See the [local API guide](docs/API.md) for further examples, validation rules, and size limits.
 
 Only share the API token with trusted tools: it permits changes to work data, attachment contents, settings, and backup restoration. WeekStride does not upload your work, but a cloud AI tool you authorize may send queried content to its own service.
 

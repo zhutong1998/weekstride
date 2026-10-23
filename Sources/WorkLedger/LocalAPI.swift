@@ -95,6 +95,9 @@ final class LocalAPIServer {
             if request.head.method == "GET", !request.body.isEmpty {
                 throw LocalAPIHTTPError(status: 400, message: "GET requests cannot contain a body.")
             }
+            if request.head.method == "GET", request.head.target == "/" {
+                return LocalAPIHelp.response
+            }
             if request.head.method == "GET", components.path == "/health", query.isEmpty {
                 return try .json(["status": "ok"])
             }
@@ -202,7 +205,8 @@ enum LocalAPIParser {
             throw LocalAPIHTTPError(status: 403, message: "只接受本机地址。")
         }
         guard headers["origin"] == nil else { throw LocalAPIHTTPError(status: 403, message: "不接受浏览器跨源请求。") }
-        guard secureEqual(headers["authorization"] ?? "", "Bearer \(token)") else {
+        let isHelp = first[0] == "GET" && first[1] == "/"
+        guard isHelp || secureEqual(headers["authorization"] ?? "", "Bearer \(token)") else {
             throw LocalAPIHTTPError(status: 401, message: "需要有效的 Bearer 访问令牌。")
         }
         guard headers["transfer-encoding"] == nil, headers["expect"] == nil else {
@@ -218,6 +222,9 @@ enum LocalAPIParser {
             let limit = isFileUpload ? maximumFileBodyBytes : maximumBodyBytes
             guard length <= limit else { throw LocalAPIHTTPError(status: 413, message: "Request body exceeds the endpoint limit of \(limit) bytes.") }
             bodyLength = length
+        }
+        guard !isHelp || bodyLength == 0 else {
+            throw LocalAPIHTTPError(status: 400, message: "GET requests cannot contain a body.")
         }
         return LocalAPIRequestHead(method: String(first[0]), target: String(first[1]), headers: headers, bodyLength: bodyLength, headerLength: headerLength)
     }

@@ -45,6 +45,7 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
                 XCTAssertEqual(settings[key] as? String, value)
             }
             XCTAssertEqual(settings["remindersEnabled"] as? Bool, true)
+            XCTAssertEqual(settings["runInMenuBar"] as? Bool, true)
             let status = try object(request("/v1/settings/status"), defaults: defaults, store: store)
             XCTAssertEqual(status["servicesAvailable"] as? Bool, false)
             XCTAssertEqual(status["canChangeReminders"] as? Bool, false)
@@ -78,6 +79,24 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
         }
     }
 
+    func testMenuBarVisibilityRoundTripsWithoutChangingWorkOrOtherSettings() throws {
+        try fixture { defaults, store in
+            let task = WorkTask(title: "Keep my work")
+            try store.saveTask(task)
+            let before = store.data
+            defaults.set("dark", forKey: "appAppearance")
+            for visible in [false, true] {
+                let result = try object(request(method: "PATCH", body: "{\"runInMenuBar\":\(visible)}"), defaults: defaults, store: store)
+                XCTAssertEqual(result["runInMenuBar"] as? Bool, visible)
+                XCTAssertEqual(defaults.object(forKey: "runInMenuBar") as? Bool, visible)
+                let status = try object(request("/v1/settings/status"), defaults: defaults, store: store)
+                XCTAssertEqual(status["runsInMenuBar"] as? Bool, visible)
+                XCTAssertEqual(defaults.string(forKey: "appAppearance"), "dark")
+                XCTAssertEqual(store.data, before)
+            }
+        }
+    }
+
     func testInvalidSettingsAndUnavailableServicesRejectWholePatch() throws {
         try fixture { defaults, store in
             defaults.set("zh-Hans", forKey: "appLanguage")
@@ -86,7 +105,8 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
                            #"{"weekStart":2.5}"#, #"{"appAppearance":"unknown"}"#, #"{"appLanguage":"fr"}"#,
                            #"{"appTimeFormat":"twelveHour"}"#, #"{"taskColumns":"four"}"#, #"{"taskDetails":null}"#,
                            #"{"taskListEffect":"fade"}"#, #"{"apiEnabled":false}"#, #"{"apiToken":"secret"}"#,
-                           #"{"runInMenuBar":false}"#, #"{"remindersEnabled":1}"#, #"{"launchAtLogin":null}"#,
+                           #"{"runInMenuBar":"false"}"#, #"{"runInMenuBar":1}"#, #"{"runInMenuBar":null}"#,
+                           #"{"runInMenuBar":false,"weekStart":9}"#, #"{"remindersEnabled":1}"#, #"{"launchAtLogin":null}"#,
                            #"{"appLanguage":"en","remindersEnabled":false}"#, #"{"appLanguage":"en","launchAtLogin":true}"#,
                            #"{"appLanguage":"en","weekStart":9}"#, #"{"appLanguage":"en","appLanguage":"system"}"#]
             for body in invalid {

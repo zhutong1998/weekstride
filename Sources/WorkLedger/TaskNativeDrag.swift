@@ -70,17 +70,23 @@ struct TaskNativeDragSource: NSViewRepresentable {
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+        static func blocksCardDrag(from hit: NSView?) -> Bool {
+            var ancestor = hit
+            while let view = ancestor {
+                // Native lists are container controls; their text fields and buttons still block dragging.
+                if view is NSTextView || (view is NSControl && !(view is NSTableView)) { return true }
+                ancestor = view.superview
+            }
+            return false
+        }
+
         func beginDrag(taskID sourceID: UUID, startLocation: CGPoint) {
             guard enabled, sourceID == taskID, draggingTaskID == nil, TaskDragState.shared.taskID == nil,
                   let host = window?.contentView, let event = NSApp.currentEvent,
                   event.type == .leftMouseDragged, event.window === window else { return }
             let start = NSPoint(x: startLocation.x, y: isFlipped ? startLocation.y : bounds.height - startLocation.y)
             let point = convert(start, to: host.superview)
-            var hit = host.hitTest(point)
-            while let view = hit {
-                if view is NSTextView || view is NSControl { return }
-                hit = view.superview
-            }
+            guard !Self.blocksCardDrag(from: host.hitTest(point)) else { return }
             guard let data = prepare(), let image = preview() else { return }
             let item = NSPasteboardItem()
             item.setData(data, forType: .init(UTType.workLedgerTask.identifier))

@@ -6,7 +6,9 @@ The app must remain running. Closing its main window can leave it running in the
 
 ## Connect and discover
 
-Every endpoint requires `Authorization: Bearer YOUR_TOKEN`, including `/health` and discovery. Start with:
+Open `http://127.0.0.1:18743/` directly in a browser for the built-in English guide, including connection instructions, copyable curl examples, field conventions, and the current route list. It works offline and displays static instructions only: no token, work data, settings, or files are exposed. No external documentation is needed to get started.
+
+Only the exact, bodyless `GET /` help page is accessible without a token. Every data and control endpoint requires `Authorization: Bearer YOUR_TOKEN`, including `/health`, `/v1`, and `/v1/capabilities`. Root URLs with query parameters and other methods are not part of the public-help exception. Start with:
 
 ```bash
 curl --header 'Authorization: Bearer YOUR_TOKEN' \
@@ -36,7 +38,7 @@ Replace identifiers such as `PROJECT_ID`, `TASK_ID`, `STEP_ID`, `ATTACHMENT_ID`,
 
 ## Request and response rules
 
-- Ordinary responses use JSON. Attachment `/content` returns raw `application/octet-stream` bytes. Errors use `{"error":"..."}`.
+- The root help page uses HTML. Ordinary API responses use JSON. Attachment `/content` returns raw `application/octet-stream` bytes. Errors use `{"error":"..."}`.
 - JSON bodies must be UTF-8 objects with `Content-Type: application/json`. Unknown fields, duplicate keys, wrong types, and missing required fields are rejected. Booleans and integers are distinct types.
 - Omitted PATCH fields are preserved. Explicit `null` clears only nullable fields documented below; it does not mean an empty string, false, or zero.
 - Ordinary dates are complete ISO 8601 date-times with a time zone, such as `2026-10-20T10:30:00+08:00` or `2026-10-20T02:30:00Z`. Input supports fractional seconds; impossible dates and missing time zones are rejected.
@@ -288,6 +290,7 @@ Use these raw values, rather than translated UI labels:
 | `taskDetails` | `expanded`, `titles` |
 | `taskListEffect` | `slide`, `slideFade`, `scaleFade`, `none` |
 | `remindersEnabled` | Boolean |
+| `runInMenuBar` | Boolean; default `true`; shows or hides the menu bar icon without quitting the app |
 | `launchAtLogin` | Boolean; requires a running `.app` bundle and application services |
 
 ```bash
@@ -299,6 +302,8 @@ api '/v1/settings' --request PATCH \
 Disabling reminders preserves task dates; re-enabling schedules future reminders and leaves already reached items visible in the app. The API cannot grant notification permission, send a test notification, or approve a macOS login item. A login change may report `requiresApproval`; complete that step in macOS Settings.
 
 Status fields include `servicesAvailable`, `apiEnabled`, `launchAtLogin`, `launchAtLoginStatus`, `notificationAuthorization`, `isBackingUp`, `runsInMenuBar`, `notificationPermissionRequiresUI`, `testNotificationRequiresUI`, and `canChangeReminders`, `canChangeLaunchAtLogin`, `canDisableAPI`, `canRotateAPIToken`. Optional service-dependent values may be omitted when unavailable. `launchAtLogin` is reported inside status, not as a top-level GET setting.
+
+`runsInMenuBar` reflects the current `runInMenuBar` setting. Hiding the icon keeps tasks, reminders and the API running; reopen WeekStride from the Dock and enable the icon again in Settings → General, or PATCH `runInMenuBar` to `true`. Task-data backups and restores leave this preference unchanged.
 
 `launchAtLoginStatus` uses `enabled`, `requiresApproval`, `notRegistered`, `notFound`, or `unknown`. `notificationAuthorization` uses `notDetermined`, `denied`, `authorized`, `provisional`, or `unknown`.
 
