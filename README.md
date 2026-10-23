@@ -1,127 +1,129 @@
-# WeekStride · 周程
+# WeekStride
 
-**按自己的工作周安排任务，在同一页看清项目、细节与下一步。**
+**Plan your working week. Keep the details and the next action in view.**
 
-周程是一款原生 macOS 工作清单。用「本周、下周、后续」整理工作，把明细、执行步骤、备注和本地附件直接放在任务卡片中；为需要紧盯的事项单独设置截止日期与提醒。所有数据保存在自己的 Mac，无需账号或云端服务。
+WeekStride is a native macOS planner for project work, recurring responsibilities, and deadlines. Organize tasks by week while keeping details, steps, notes, and local attachments on the same screen. Your work stays on your Mac, with no account or cloud service required.
 
-**WeekStride is a native macOS weekly planner with project tasks, inline details, recurring reminders, and a local API. Your work stays on your Mac.**
+![WeekStride task board in a three-column layout with rendered demo data](docs/images/task-board.png)
 
-![WeekStride 三列任务视图，使用渲染示例数据](docs/images/task-board.png)
+*Three-column task view with rendered demo data. No real work data is shown.*
 
-*英文界面的三列任务视图。图片使用渲染示例数据，不包含真实工作内容。*
+## Features
 
-## 功能
+- **A week that fits your schedule.** Choose any day as the start of your working week, such as Thursday through Wednesday. Planning groups and completion history follow that setting.
+- **Project tasks with inline details.** Read and edit task details, steps, notes, attachments, and dates directly on each card. Tasks can also exist without a project.
+- **Separate planning, deadlines, and reminders.** Decide when to work on something, when it must be finished, and when to receive a notification independently.
+- **A record of every completion.** Tasks and steps retain their completion dates. Completing a recurring task preserves the original and creates a separate next occurrence.
+- **Flexible task views.** Use one, two, or three columns, or an adaptive layout. Show full details or expand tasks from a titles-only view. Each project remembers its view and week filter.
+- **Local files and complete backups.** Drop files onto a task to copy them into local storage. Backups include projects, tasks, completion records, and referenced attachments.
+- **An optional local API.** Let trusted scripts or AI tools query tasks and mark work complete. Enable it yourself, authenticate with a token, and disable it or rotate the token at any time.
 
-- **按工作周规划。** 每周从哪一天开始由你决定，例如周四到周三。本周、下周和各个日期周同步采用这个周期。
-- **项目与任务详情同屏。** 展开查看和直接编辑任务明细、执行步骤、备注、附件及日期；任务也可以不归属任何项目。
-- **计划、截止与提醒分别设置。** 安排哪周处理、何时必须完成、什么时候提醒，互不覆盖。
-- **保留每一次完成。** 主任务和步骤都记录实际完成时间；循环任务完成后保留原记录，并创建独立的下一次任务。
-- **调整适合自己的视图。** 支持一列、两列、三列或自适应；也可仅显示标题，点击后展开详情。各项目分别记住显示方式和周筛选。
-- **本地文件与备份。** 文件可直接拖进任务，复制到本地数据目录；完整备份包含项目、任务、完成记录和仍被引用的附件。
-- **可选的本地 API。** 手动开启后，脚本或可信 AI 工具可查询任务和记录完成；使用访问令牌认证，随时可以关闭或重置。
+## Plan the week without losing the deadline
 
-## 按自己的节奏安排一周
-
-| 信息 | 用途 | 示例 |
+| Field | Purpose | Example |
 |---|---|---|
-| 计划时间 | 安排哪一周或哪一天处理 | 本周更新证书 |
-| 截止日期 | 记录最晚完成时间 | 证书在月底到期 |
-| 提醒日期 | 让 macOS 在指定时间提醒 | 到期前三天上午提醒 |
-| 完成日期 | 留下实际完成记录，可补录和修改 | 周五完成更新 |
+| Planned date or week | When you intend to work on the task | Renew a certificate this week |
+| Due date | When the work must be finished | The certificate expires at the end of the month |
+| Reminder | When macOS should notify you | Three days before expiry, in the morning |
+| Completion date | When the work was actually finished | Record Friday's deployment |
 
-未完成的过往计划会并入本周，并保留「已超时」提示。重新选择本周或未来周即重新安排任务。选择整周时按工作周判断超时，选择具体日期时按该日期判断；修改每周开始日后，分组和数量会重新计算，任务中保存的日期保持原样。
+Unfinished tasks from earlier planned dates appear in the current week with an overdue planning indicator. Selecting the current week or a future week reschedules the task. A whole-week plan becomes overdue after that working week ends; a specific-date plan becomes overdue after that day. Changing the start of the week recalculates groups and counts while preserving the dates stored on each task.
 
-完成任务后，记录进入完成历史；本周视图及项目对应周下方也可查看该周实际完成的工作。只完成部分步骤时，主任务继续保留在待办中。完成全部步骤会完成主任务，直接完成主任务会同时完成剩余步骤。
+Completed tasks remain available in history and below the pending tasks for their actual completion week. Completing some steps leaves the parent task open. Completing every step completes the parent; completing the parent also completes its remaining steps.
 
-循环可按完成日期或固定截止周期计算，支持天、周、月、年及自定义间隔。例如选择「完成后每 6 个月」，本次完成后就会生成下一项任务。历史记录保留，下一次任务的步骤状态重置，计划时间恢复为未安排，备注和附件继续沿用。
+Recurrence can follow the actual completion date or a fixed due-date schedule, using days, weeks, months, years, or a custom interval. For example, completing a task set to repeat every six months creates its next occurrence immediately. The previous record remains intact. The next task inherits details, notes, and attachments, resets its steps, and starts without a weekly plan.
 
-## 日常使用
+## Everyday workflow
 
-1. 创建项目，或直接在「全部任务」中添加未关联项目的任务。
-2. 点击顶部加号或按 `⌘N` 新增任务，选择计划周，填写标题、明细、备注和执行步骤。
-3. 按回车保存当前任务；明细和备注用 `Shift＋回车` 换行，执行步骤用 `Shift＋回车` 继续添加下一步。点击任务外部会保留输入内容。
-4. 将文件从 Finder 拖到任务卡片，或通过附件按钮添加。原文件保留，应用保存自己的副本。
-5. 按需要添加截止日期、提醒和循环。日期弹窗支持快捷日期与时间，点击「确定」后生效。
-6. 完成后查看历史，或通过底部操作提示和 `⌘Z` 撤销支持的操作。
+1. Create a project, or add a task without a project from All tasks.
+2. Use the top plus button or `Command-N` to add a task. Pick its planned week and enter a title, details, notes, and steps.
+3. Press Return to save the task. Use `Shift-Return` for a new line in details or notes, or to continue with another step. Clicking outside the task keeps your input in place.
+4. Drop files from Finder onto the card, or use the attachment button. WeekStride stores its own copy and leaves the original file untouched.
+5. Add a due date, reminder, or recurrence when needed. Date and time shortcuts stay in the picker until you confirm.
+6. Complete the work and review its history. Supported operations can be undone from the feedback bar or with `Command-Z`.
 
-任务可拖到侧栏项目以更改归属，拖到「全部任务」以取消归属；也可拖到周标签重新安排。项目移动和计划调整保留正文、日期、步骤与附件。
+Drag a task to a sidebar project to move it, or to All tasks to remove its project assignment. Drop it onto a week tab to reschedule it. Moving a task or changing its plan preserves its text, other dates, steps, and attachments.
 
-## 外观与设置
+## Appearance and settings
 
-设置包含通用、外观与动效、提醒、本地 API、数据与备份、关于与帮助。
+Settings cover general preferences, appearance and motion, reminders, the local API, data and backups, and app information.
 
-- 跟随系统、浅色或深色外观；四档字体大小。
-- 简体中文与 English；跟随系统、12 小时或 24 小时制。
-- 自定义每周开始日；登录时启动和菜单栏运行。
-- 完整详情或仅标题模式；多列与自适应布局，空间不足时自动减少列数。
-- 列表切换效果可选或关闭，并遵循 macOS 的「减少动态效果」。
+- Follow the system appearance or choose light or dark mode; select from four text sizes.
+- Use English or Simplified Chinese, with system, 12-hour, or 24-hour time formatting.
+- Choose your week start day, enable launch at login, and keep the app running in the menu bar.
+- Set full details or titles-only mode, with fixed or adaptive columns. Narrow windows and larger text automatically reduce the column count.
+- Choose a list transition effect or turn transitions off. The app respects the macOS Reduce Motion setting.
 
-提醒使用 macOS 本地通知，需要在系统中允许通知。可以暂停任务提醒，任务内的提醒日期会保留，已到时间的事项仍可在「待处理提醒」中查看。实际通知呈现也受专注模式和系统设置影响。
+Reminders use macOS local notifications and require notification permission. Pausing reminders preserves the dates on your tasks, and reached reminders remain visible in the pending-reminders view. Notification delivery also depends on Focus and system settings.
 
-## 数据、隐私与备份
+## Data, privacy, and backups
 
-周程没有账号、遥测、内置 AI 服务或云同步，也没有第三方运行依赖。任务内容和附件保存在本机；可在「设置 → 数据与备份」打开数据目录。
+WeekStride has no account, telemetry, built-in AI service, cloud sync, or third-party runtime dependencies. Task content and attachments are stored locally. You can open the data folder from Settings.
 
-为兼容原有工作数据，数据目录仍为：
+The legacy data identifier is retained for compatibility:
 
 ```text
 ~/Library/Application Support/local.workledger/
-  data.json       # 项目、任务和完成记录
-  attachments/    # 本地附件
-  api-token       # 本机 API 访问令牌
-  Backups/        # 导入备份前的安全副本
+  data.json       # Projects, tasks, and completion records
+  attachments/    # Local attachment copies
+  api-token       # Local API access token
+  Backups/        # Safety copies created before restoring a backup
 ```
 
-完整备份使用 `.workledgerbackup` 文件夹，包含任务及仍被引用的附件，不包含 API 令牌和应用偏好。恢复备份会替换当前工作数据，恢复前会先保留安全副本。卸载应用或迁移电脑前，请先导出备份。
+A `.workledgerbackup` folder contains task data and referenced attachments, excluding the API token and application preferences. Restoring a backup replaces the current work data after creating a safety copy. Export a backup before uninstalling the app or moving to another Mac.
 
-数据和备份没有额外加密，依赖本机账户权限及系统磁盘保护。移除附件引用后，磁盘副本暂时保留，避免影响完成历史或循环任务；导出备份只包含仍被任务引用的附件。
+Data and backups are not additionally encrypted; they rely on your macOS account permissions and disk protection. Removing an attachment reference currently leaves the stored file in place to protect history and recurring tasks. Exported backups include only files still referenced by tasks.
 
-本地 API 默认关闭，只监听 `127.0.0.1:18743`。应用需要保持运行；关闭窗口后可继续在菜单栏运行，完全退出后 API 停止。接口提供查询和完成操作，不提供附件内容下载或任意文件访问。详见 [本地 API 使用说明](docs/API.md)。
+The local API is off by default and listens only on `127.0.0.1:18743`. The app must be running; closing its window can leave it running in the menu bar, while quitting stops the API. It supports queries and completion, with no attachment-content download or arbitrary file access. See the [local API guide](docs/API.md).
 
-将令牌交给其他工具前，请确认工具可信。周程自身不上传工作内容，但你授权使用 API 的云端 AI 工具可能会将查询结果发送到其服务端。
+Only share the API token with trusted tools. WeekStride does not upload your work, but a cloud AI tool you authorize may send queried content to its own service.
 
-## 安装与构建
+## Install
 
-需要 **macOS 14 或更新版本**。在 [GitHub Releases](https://github.com/zhutong1998/weekstride/releases/latest) 下载 **Apple Silicon** 压缩包，解压后将 `WeekStride.app` 拖入「应用程序」。当前下载包为 ad-hoc 签名，未经 Apple 公证。Intel 源码构建尚未实机验证。
+Requires **macOS 14 or later**. Download the **Apple Silicon** archive from [GitHub Releases](https://github.com/zhutong1998/weekstride/releases/latest), extract it, and move `WeekStride.app` to Applications. The current download is ad-hoc signed and is not notarized by Apple. Intel source builds have not been tested on hardware.
 
-也可以使用 Homebrew 安装 Apple Silicon 版本：
+Install the Apple Silicon build with Homebrew:
 
 ```bash
 brew tap zhutong1998/weekstride https://github.com/zhutong1998/weekstride
 brew install --cask zhutong1998/weekstride/weekstride
 ```
 
-从原「工作清单」升级时，请先备份并退出旧版，再替换为 WeekStride。两版沿用相同的数据和偏好标识；旧本机 Tap 与本仓库属于不同安装项，请避免同时运行两版，保留原有工作数据。
+### Upgrading from WorkLedger
 
-从源码构建需要 **Xcode 26 或更新版本，包含 macOS 26 SDK**；应用运行仍支持 macOS 14 及以上。无需购买 Apple 开发者会员即可在自己的 Mac 上编译运行。
+WeekStride retains the `local.workledger` bundle identifier and data directory, so existing tasks, attachments, preferences, and the API token remain available. The Homebrew cask name changes from `workledger` to `weekstride`. Export a backup, quit the old app, and replace it rather than running both app bundles at once. If removing a legacy cask, do not use `--zap`, which can remove application data and preferences.
+
+## Build from source
+
+Use **Xcode 26 or later with the macOS 26 SDK**. The resulting app still supports macOS 14 and later. A paid Apple Developer membership is not required to build and run it on your own Mac.
 
 ```bash
 git clone https://github.com/zhutong1998/weekstride.git
 cd weekstride
 ```
 
-用 Xcode 打开 `WorkLedger.xcodeproj`，选择 **WorkLedger → My Mac**，按 `⌘R` 运行。项目和模块的内部标识暂时保留 `WorkLedger`，应用名称为 WeekStride。
+Open `WorkLedger.xcodeproj`, select **WorkLedger → My Mac**, and press `Command-R`. Internal project and module names remain `WorkLedger`; the application is named WeekStride.
 
-也可以在仓库根目录运行：
+Alternatively, run these commands from the repository root:
 
 ```bash
-# 构建原生应用
+# Build the native application
 ./scripts/build.sh
 
-# 运行数据层与本地 API 等测试
+# Run data-layer, local API, and other tests
 swift test
 ```
 
-应用产物为 `build/Build/Products/Release/WeekStride.app`。SwiftPM 可执行产品 `WeekStrideDev` 用于开发和测试；日常使用请运行打包的 `.app`，以保持系统通知的应用身份。
+The app is built at `build/Build/Products/Release/WeekStride.app`. The SwiftPM executable product, `WeekStrideDev`, is intended for development and testing. Use the bundled `.app` for everyday use so system notifications have the correct application identity.
 
-构建脚本默认使用本机 ad-hoc 签名，不包含 Developer ID 签名或 Apple 公证。公开分发时应在发布说明中明确签名和公证状态。
+The build script uses local ad-hoc signing. It does not perform Developer ID signing or Apple notarization.
 
-## 参与开发
+## Contributing
 
-欢迎提交问题和改进建议。反馈界面问题时，请说明 macOS 版本、显示设置、复现步骤和预期结果；分享截图或示例前，请移除真实任务、附件和访问令牌。
+Issues and improvements are welcome. For interface reports, include your macOS version, display settings, steps to reproduce, and expected behavior. Remove real task content, attachments, and access tokens before sharing screenshots or examples.
 
-技术栈为 Swift、SwiftUI 和 macOS 系统框架，无需安装第三方库。目前专注于单机工作管理，尚不包含团队协作、移动端和云同步。
+WeekStride uses Swift, SwiftUI, and macOS system frameworks, with no third-party libraries to install. It currently focuses on work on a single Mac; team collaboration, mobile apps, and cloud sync are not included.
 
-## 开源许可
+## License
 
-采用 [MIT License](LICENSE)。
+[MIT License](LICENSE).

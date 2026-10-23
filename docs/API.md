@@ -1,16 +1,16 @@
-# WeekStride 本地 API
+# WeekStride local API
 
-本地 API 让脚本和可信工具查询工作内容、完成任务或执行步骤。它默认关闭，由用户在「设置 → 本地 API」手动开启；只监听本机 `http://127.0.0.1:18743`，每个请求都需要 Bearer 访问令牌，包括健康检查。
+The local API lets trusted scripts and tools query work and complete tasks or steps. It is disabled by default. Enable it in **Settings → Local API**. It listens only on `http://127.0.0.1:18743`, and every request requires a Bearer access token, including health checks.
 
-应用必须保持运行。关闭主窗口后可继续在菜单栏运行，完全退出应用后 API 停止。关闭 API 或重置令牌会使现有连接失效，旧令牌无法继续使用。
+The app must remain running. Closing the main window can leave it running in the menu bar; quitting stops the API. Disabling the API or rotating the token invalidates existing connections. The previous token cannot be used after rotation.
 
-## 首次连接
+## First connection
 
-1. 在「设置 → 本地 API」中开启服务，等待状态显示已开启。
-2. 复制访问令牌，只提供给可信工具。
-3. 调用健康检查，再查询任务 ID，最后执行完成操作。
+1. Enable the API in Settings and wait until its status indicates that it is running.
+2. Copy the access token and provide it only to a trusted tool.
+3. Check the service health, query task IDs, and then request completion.
 
-下列示例使用占位符；请在自己的工具中替换 `YOUR_TOKEN` 和 `TASK_UUID`。
+The examples use placeholders. Replace `YOUR_TOKEN` and `TASK_UUID` in your own tool.
 
 ```bash
 curl --header 'Authorization: Bearer YOUR_TOKEN' \
@@ -26,59 +26,59 @@ curl --request POST \
   'http://127.0.0.1:18743/v1/tasks/TASK_UUID/complete'
 ```
 
-## 接口
+## Endpoints
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | 返回服务状态，也需要认证 |
-| GET | `/v1/projects` | 查询项目 |
-| GET | `/v1/tasks` | 查询任务，包含正文与附件元数据 |
-| GET | `/v1/tasks?status=open` | 仅未完成任务；也可传 `completed` |
-| GET | `/v1/tasks?projectId=UUID` | 按项目过滤，可与 `status` 同时使用 |
-| GET | `/v1/tasks/UUID` | 查询单个任务 |
-| POST | `/v1/tasks/UUID/complete` | 完成主任务 |
-| POST | `/v1/tasks/UUID/subtasks/UUID/complete` | 完成执行步骤 |
+| GET | `/health` | Service status; authentication is required |
+| GET | `/v1/projects` | List projects |
+| GET | `/v1/tasks` | List tasks, including text and attachment metadata |
+| GET | `/v1/tasks?status=open` | Filter unfinished tasks; `completed` is also accepted |
+| GET | `/v1/tasks?projectId=UUID` | Filter by project; can be combined with `status` |
+| GET | `/v1/tasks/UUID` | Get one task |
+| POST | `/v1/tasks/UUID/complete` | Complete a parent task |
+| POST | `/v1/tasks/UUID/subtasks/UUID/complete` | Complete a step |
 
-任务响应中，`plannedAt` 为独立的计划时间，`planGranularity` 为 `day` 或 `week`，与 `dueAt`、`reminderAt` 分开保存。未安排时省略前两个字段；未关联项目时省略 `projectID`。不带项目过滤的查询也会返回未关联项目的任务。
+Task responses store the independent plan in `plannedAt`, with `planGranularity` set to `day` or `week`. These fields are separate from `dueAt` and `reminderAt`. Unscheduled tasks omit the plan fields. Tasks without a project omit `projectID`; an unfiltered query includes these tasks too.
 
-接口目前提供查询和完成，不提供任务创建、正文修改、重新安排计划、项目移动、附件内容下载或任意文件访问。
+The API currently supports queries and completion. It does not support creating tasks, editing text, rescheduling, moving projects, downloading attachment contents, or accessing arbitrary files.
 
-## 完成与循环
+## Completion and recurrence
 
-完成请求可以不带正文，或发送 `{}`，此时记录当前时间。也可以指定历史完成时间：
+A completion request may have no body, or use `{}` to record the current time. You can also provide a historical completion time:
 
 ```json
 {"completedAt":"2026-10-20T10:30:00+08:00"}
 ```
 
-`completedAt` 必须为包含时区的完整 ISO 8601 日期时间字符串，支持小数秒。正文非空时需要 `Content-Type: application/json`。未知字段、空值、无效日期、缺少时区或晚于今天的完成日期返回 `400`，不会完成任务。
+`completedAt` must be a complete ISO 8601 date-time string with a time zone. Fractional seconds are supported. A nonempty body requires `Content-Type: application/json`. Unknown fields, null values, invalid dates, a missing time zone, or a completion date later than today return `400` without completing the task.
 
-有效请求会先提交该任务正在编辑的内容；编辑校验或保存失败时返回 `400`，任务保持未完成。
+A valid request first commits any active edits for that task. If validation or saving fails, the API returns `400` and leaves the task unfinished.
 
-完成结果包含 `task`、可选的 `nextTask` 和 `alreadyCompleted`：
+The response contains `task`, an optional `nextTask`, and `alreadyCompleted`:
 
-- 循环任务会保留本次完成记录，并创建独立的下一次任务。
-- 已完成任务重复请求会返回原完成记录及同一个下一次任务，不会重复创建。
-- 完成某个步骤尚未触发主任务完成时，返回当前主任务，`nextTask` 为空。
-- 完成后的原任务保留原计划时间，新生成的循环任务计划为未安排。
+- Completing a recurring task retains the completed record and creates a separate next occurrence.
+- Repeating a request for an already completed task returns the original completion record and the same next task, without creating duplicates.
+- When completing a step does not complete the parent, the response contains the updated parent and no next task.
+- The completed task keeps its original plan. A newly generated recurring task starts without a plan.
 
-## 错误与连接检查
+## Errors and connection checks
 
-| 情况 | 处理 |
+| Result | What to check |
 |---|---|
-| 连接被拒绝 | 确认应用运行、API 开启，地址为 `http://127.0.0.1:18743` |
-| `401` | 检查 Bearer 令牌；重置后需更新工具中的令牌 |
-| `403` | 只接受本机请求；带 `Origin` 的浏览器请求会被拒绝 |
-| `400` | 查看 `error`，检查日期、JSON、查询参数或应用内尚未保存的编辑 |
-| `404` | 重新查询任务和步骤 ID，记录可能已被删除 |
-| `500` | 操作未完成，请检查应用中的任务和存储状态后重试 |
+| Connection refused | Ensure the app is running, the API is enabled, and the address is `http://127.0.0.1:18743` |
+| `401` | Check the Bearer token; update your tool after rotating it |
+| `403` | Only local requests are accepted; browser requests containing `Origin` are rejected |
+| `400` | Read `error` and check dates, JSON, query parameters, or unsaved edits in the app |
+| `404` | Query task and step IDs again; the record may have been deleted |
+| `500` | The operation did not complete; check tasks and storage status in the app before retrying |
 
-服务拒绝非本机 Host，限制请求头为 16 KB、正文为 64 KB，并设置连接超时。
+The service rejects nonlocal Host headers, limits request headers to 16 KB and bodies to 64 KB, and applies connection timeouts.
 
-## 隐私
+## Privacy
 
-令牌保存在本机数据目录，不包含在任务备份中。不要提交令牌或真实任务响应到公开仓库，也不要把令牌交给不可信网页和工具。
+The token is stored in the local data directory and is excluded from task backups. Do not commit it or real task responses to a public repository, or share it with untrusted websites and tools.
 
-WeekStride 不主动上传工作内容。你授权使用 API 的云端 AI 或其他工具，可能会将查询结果发送到自己的服务端；是否允许由你和所用工具决定。
+WeekStride does not upload your work. A cloud AI service or another tool that you authorize may send queried content to its own servers. Whether to allow that depends on you and the tool you choose.
 
-[返回项目介绍](../README.md)
+[Back to the project overview](../README.md)
