@@ -2,11 +2,48 @@
 
 **Plan your working week. Keep the details and the next action in view.**
 
-WeekStride is a native macOS planner for project work, recurring responsibilities, and deadlines. Organize tasks by week while keeping details, steps, notes, and local attachments on the same screen. Your work stays on your Mac, with no account or cloud service required.
+WeekStride is a native macOS planner for individual project and operations work: the tasks you need to move forward this week, the dates you need to watch, and the recurring jobs you need to remember next time.
+
+Its main focus is the working task list. You can review several projects, read the instructions and previous notes, work through steps, open the relevant files, and record completion from one screen. Organize that work by week, then add precise deadlines and reminders wherever they are needed.
+
+Your work stays on your Mac. No account or cloud service is required, and automation is available through an optional local API that you enable and control.
 
 ![WeekStride task board in a three-column layout with rendered demo data](docs/images/task-board.png)
 
 *Three-column task view with rendered demo data. No real work data is shown.*
+
+## Who it is for
+
+WeekStride suits people who handle many small pieces of work across projects and need to keep the operational context close to each task.
+
+| Working pattern | How WeekStride supports it |
+|---|---|
+| Website or service operations | Keep certificate renewals, maintenance checks, deployment notes, and checklists grouped by project |
+| Office and project coordination | Review this week's commitments alongside task instructions, supporting files, and follow-up dates |
+| Recurring administration | Record each completed occurrence and create the next task for periodic reviews or maintenance |
+| Independent technical work | Move between a hands-on task list and trusted scripts or AI tools using the same local work data |
+
+It is built around one person's work on one Mac. Shared assignment, team permissions, mobile clients, and cloud sync are outside the current feature set.
+
+## What the design focuses on
+
+### A working week you can actually use
+
+Some work belongs in this week's plan before it has an exact deadline. Other work has a firm expiry date but can be handled on several different days. WeekStride records those decisions separately, so rescheduling your plan preserves the deadline and reminder.
+
+The working week can start on any weekday. If your reporting cycle runs Thursday through Wednesday, weekly groups, counts, and completion history follow that cycle. Overdue planned work stays visible in the current week until you complete or reschedule it.
+
+### Enough context to act on a task
+
+A task card can show its instructions, execution steps, notes, attachments, and dates together. Details are editable in place. Full-detail and multi-column views support reviewing several tasks at once; titles-only mode provides a compact list with details available on expansion.
+
+Projects give the work a home, while each project remembers its preferred view and week filter. A file dropped onto a task becomes a local attachment copy, keeping the material with the work across later reviews and recurring occurrences.
+
+### Completion that leaves a useful record
+
+Finishing a task records what was completed and when. A recurring task produces a new occurrence while retaining the finished record. You can review actual completions for a working week even when those tasks were originally planned earlier.
+
+This supports two separate questions during a weekly review: what still needs attention, and what was actually finished? Changing a recorded completion date does not silently rewrite the dates of a later recurring task.
 
 ## Features
 
@@ -33,6 +70,19 @@ Completed tasks remain available in history and below the pending tasks for thei
 
 Recurrence can follow the actual completion date or a fixed due-date schedule, using days, weeks, months, years, or a custom interval. For example, completing a task set to repeat every six months creates its next occurrence immediately. The previous record remains intact. The next task inherits details, notes, and attachments, resets its steps, and starts without a weekly plan.
 
+## Example: keeping a domain certificate up to date
+
+An operations task can carry the plan, the deadline, the procedure, and the next follow-up together:
+
+1. **Give it a project.** Create a Website operations project and add a task such as Renew the example.com certificate.
+2. **Plan the work.** Select This week so it appears in the current working cycle. Set the due date to the certificate's actual recorded expiry and add a reminder a few days beforehand.
+3. **Keep the procedure on the card.** Add details about the deployment, then steps such as verify domain ownership, renew and deploy the certificate, and check HTTPS after deployment.
+4. **Keep supporting material nearby.** Attach the renewal checklist and add notes about the last deployment. The card displays these alongside the steps and dates.
+5. **Record the outcome.** Check off the steps or complete the parent task. WeekStride records the actual completion dates and keeps the finished task available in history and its actual completion week.
+6. **Create the next occurrence.** With recurrence set to every six months after completion, finishing the task creates the next one. The new task keeps the procedure, notes, and attachments, resets step completion, and starts without a weekly plan.
+
+The next due date and reminder are calculated from the recurrence rule. Check them against the renewed certificate's actual validity and adjust them as needed; the application does not inspect the certificate. When the next review approaches, assign that occurrence to a working week without changing the finished record.
+
 ## Everyday workflow
 
 1. Create a project, or add a task without a project from All tasks.
@@ -43,6 +93,14 @@ Recurrence can follow the actual completion date or a fixed due-date schedule, u
 6. Complete the work and review its history. Supported operations can be undone from the feedback bar or with `Command-Z`.
 
 Drag a task to a sidebar project to move it, or to All tasks to remove its project assignment. Drop it onto a week tab to reschedule it. Moving a task or changing its plan preserves its text, other dates, steps, and attachments.
+
+## Automation you choose to enable
+
+The local API is intended to let a trusted tool work with the same projects and records you see in the app. For example, a script can query this week's tasks, an AI tool can add a follow-up with notes and steps, or an automation can complete a task after its work succeeds. The API also covers attachments, settings, managed backups, and confirmed backup restoration.
+
+There is no built-in AI provider or AI subscription in WeekStride. You choose the tool, enable the API manually, and supply its access token. The server listens only on the local loopback address; you can stop it or rotate the token from the app. Initial activation and macOS permission decisions remain under your control.
+
+The API can read attachment contents and change work data, so its token should be given only to trusted tools. A cloud AI tool may send that data to its own service. The [API guide](docs/API.md) documents the complete operations, confirmation requirements, and limits.
 
 ## Appearance and settings
 
