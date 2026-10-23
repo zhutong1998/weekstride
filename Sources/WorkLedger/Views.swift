@@ -946,13 +946,8 @@ struct RootView: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
                     ForEach(filters) { filter in
-                        PlanningDropTab(title: planFilterTitle(filter), count: filter == .all ? tasks.count : (counts[filter] ?? 0),
-                                        selected: planFilter == filter, action: {
-                            guard finishCurrentEdits() else { return }
-                            clearSearchFocus(); dismissNavigationFeedback()
-                            setListLocation(selection == .thisWeek && filter != .thisWeek ? .all : selection, filter: filter)
-                            PlanFilterPreferences().save(filter, for: (selection ?? .all).planFilterPreferenceKey)
-                        }, onDrop: { moveTask($0, toPlan: filter) }).id(filter)
+                        planningFilterTab(filter, count: filter == .all ? tasks.count : (counts[filter] ?? 0))
+                            .id(filter)
                     }
                 }.padding(.vertical, 2)
             }
@@ -961,6 +956,18 @@ struct RootView: View {
             .onChange(of: planFilter) { _, filter in proxy.scrollTo(filter, anchor: filter == .all || filter == .thisWeek ? .leading : .center) }
         }
         .frame(height: filters.isEmpty ? 0 : 32)
+    }
+
+    private func planningFilterTab(_ filter: TaskPlanFilter, count: Int) -> PlanningDropTab {
+        PlanningDropTab(title: planFilterTitle(filter), count: count, selected: planFilter == filter,
+                        action: { selectPlanFilter(filter) }, onDrop: { moveTask($0, toPlan: filter) })
+    }
+
+    private func selectPlanFilter(_ filter: TaskPlanFilter) {
+        guard finishCurrentEdits() else { return }
+        clearSearchFocus(); dismissNavigationFeedback()
+        setListLocation(selection == .thisWeek && filter != .thisWeek ? .all : selection, filter: filter)
+        PlanFilterPreferences().save(filter, for: (selection ?? .all).planFilterPreferenceKey)
     }
 
     private func loadDisplaySetting() {
