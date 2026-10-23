@@ -80,9 +80,9 @@
 "修改此步骤的完成日期，平时不显示时间" = "Change the step completion date; it is normally hidden";
 "修改计划时间" = "Change planned date";
 "允许 macOS 发送提醒；系统通知仍受专注模式影响" = "Allow macOS reminders; Focus settings still apply";
-"允许本机工具通过令牌查询和完成任务；关闭后立即停止服务" = "Allow local tools with a token to read and complete tasks; turning off stops the service immediately";
+"允许本机工具通过令牌查询和完成任务；关闭后立即停止服务" = "Allow trusted local tools to manage work, attachments, settings, and backups; turning off stops the service immediately";
 "允许通知" = "Allow notifications";
-"先开启服务并复制令牌，再查询任务 ID，最后调用完成接口。主任务和步骤都支持指定完成日期，重复请求不会重复生成循环任务。" = "Enable the service and copy its token, read the task ID, then call the completion endpoint. Tasks and steps accept completion dates. Repeated requests do not create duplicate occurrences.";
+"先开启服务并复制令牌，再查询任务 ID，最后调用完成接口。主任务和步骤都支持指定完成日期，重复请求不会重复生成循环任务。" = "Enable the service, copy the token, and call GET /v1/capabilities to discover routes before querying or managing work. Tasks and steps support completion dates; repeated completion does not duplicate recurring tasks.";
 "全部" = "All";
 "全部任务" = "All tasks";
 "全部历史" = "All history";
@@ -274,7 +274,7 @@
 "按固定日期循环需要设置截止日期。" = "A due date is required to repeat on a fixed schedule.";
 "按截止日期查看任务，不受周计划影响。" = "Tasks are shown by due date, independently of their weekly plan.";
 "按计划" = "On schedule";
-"接口可读取任务文本和附件元数据，不提供文件内容下载。云端 AI 读取的任务文本可能发送到其服务端。" = "The API reads task text and attachment metadata, not file contents. A cloud AI tool may send the text it reads to its servers.";
+"接口可读取任务文本和附件元数据，不提供文件内容下载。云端 AI 读取的任务文本可能发送到其服务端。" = "The API can manage tasks, projects, attachments, settings, and backups. A cloud AI tool may send retrieved content to its servers.";
 "接口地址" = "API address";
 "提醒" = "Reminders";
 "提醒已暂停，任务中的提醒日期仍保留。" = "Reminders are paused. The task reminder date is retained.";
@@ -425,7 +425,7 @@
 "特大" = "Extra large";
 "状态" = "Status";
 "生成新令牌，旧令牌立即失效" = "Generate a new token and immediately invalidate the old one";
-"界面按钮与 API 共用完成规则。API 不提供文件内容下载；将任务交给云端 AI 时，相关文本可能离开本机。" = "The API and interface use the same completion rules. The API does not download file contents. A cloud AI tool may send task text outside this Mac.";
+"界面按钮与 API 共用完成规则。API 不提供文件内容下载；将任务交给云端 AI 时，相关文本可能离开本机。" = "The API and interface share task validation and completion rules. The API includes attachment and backup contents; a cloud AI tool with your token may send work outside this Mac.";
 "登录时启动" = "Launch at login";
 "登录项状态暂不可用。" = "Login item status is currently unavailable.";
 "目标项目不存在。" = "The destination project no longer exists.";
@@ -448,7 +448,7 @@
 "立即切换，不播放列表动画。" = "Switch immediately without list animation.";
 "等待系统批准，请在系统设置的登录项中允许。" = "Waiting for approval. Allow the app in System Settings → Login Items.";
 "筛选完成日期不早于这一天的任务" = "Include tasks completed on or after this day";
-"简体中文" = "简体中文";
+"简体中文" = "Simplified Chinese";
 "系统通知" = "System notifications";
 "结束" = "End";
 "缩放淡入淡出" = "Scale & fade";
@@ -501,7 +501,7 @@
 "这次操作已经撤销。" = "This action has already been undone.";
 "这项工作需要处理了，打开工作清单查看详情。" = "This task needs attention. Open WeekStride for details.";
 "连接失败，请确认 API 已开启并检查服务状态。" = "Connection failed. Confirm the API is enabled and check its status.";
-"连接正常，可以查询和完成任务。" = "Connected. Tasks can be read and completed.";
+"连接正常，可以查询和完成任务。" = "Connected. Work can be queried and managed.";
 "连接自检" = "Test connection";
 "退出" = "Quit";
 "退出工作清单" = "Quit WeekStride";

@@ -48,6 +48,37 @@ public final class WorkStore: ObservableObject {
         try commit(next)
     }
 
+    @discardableResult
+    public func updateProject(id: UUID, name: String? = nil, colorHex: String? = nil, isArchived: Bool? = nil) throws -> Project {
+        guard let index = data.projects.firstIndex(where: { $0.id == id }) else { throw LedgerError.notFound("项目不存在。") }
+        var next = data
+        if let name { next.projects[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let colorHex { next.projects[index].colorHex = colorHex }
+        if let isArchived { next.projects[index].isArchived = isArchived }
+        if next != data { try commit(next) }
+        return next.projects[index]
+    }
+
+    @discardableResult
+    public func deleteProject(id: UUID) throws -> Project {
+        guard let project = data.projects.first(where: { $0.id == id }) else { throw LedgerError.notFound("项目不存在。") }
+        var next = data
+        next.projects.removeAll { $0.id == id }
+        for index in next.tasks.indices where next.tasks[index].projectID == id {
+            next.tasks[index].projectID = nil
+            next.tasks[index].updatedAt = Date()
+        }
+        try commit(next)
+        return project
+    }
+
+    public func validateTask(_ task: WorkTask) throws {
+        var next = data
+        if let index = next.tasks.firstIndex(where: { $0.id == task.id }) { next.tasks[index] = task }
+        else { next.tasks.append(task) }
+        try Self.validate(next)
+    }
+
     public func saveTask(_ task: WorkTask) throws {
         var task = task
         task.title = task.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -123,9 +154,18 @@ public final class WorkStore: ObservableObject {
     }
 
     public func undoCompletion(id: UUID) throws {
+        let next = try reopeningTask(id: id)
+        if next != data { try commit(next) }
+    }
+
+    public func validateUndoCompletion(id: UUID) throws {
+        try Self.validate(reopeningTask(id: id))
+    }
+
+    private func reopeningTask(id: UUID) throws -> LedgerData {
         guard let index = data.tasks.firstIndex(where: { $0.id == id }) else { throw LedgerError.notFound("任务不存在。") }
         let task = data.tasks[index]
-        guard task.completedAt != nil else { return }
+        guard task.completedAt != nil else { return data }
         if let nextID = task.nextTaskID, let following = data.tasks.first(where: { $0.id == nextID }) {
             guard following.updatedAt == following.createdAt, following.completedAt == nil,
                   following.nextTaskID == nil, following.subtasks.allSatisfy({ $0.completedAt == nil }) else {
@@ -147,7 +187,7 @@ public final class WorkStore: ObservableObject {
         next.tasks[index].nextTaskID = nil
         next.tasks[index].updatedAt = Date()
         if let nextID = task.nextTaskID { next.tasks.removeAll { $0.id == nextID } }
-        try commit(next)
+        return next
     }
 
     public func setCompletionDate(taskID: UUID, at date: Date) throws {
@@ -187,6 +227,14 @@ public final class WorkStore: ObservableObject {
     }
 
     public func restoreDeletedTask(_ snapshot: TaskDeletion) throws {
+        try commit(restoringDeletedTask(snapshot))
+    }
+
+    public func validateRestoringDeletedTask(_ snapshot: TaskDeletion) throws {
+        try Self.validate(restoringDeletedTask(snapshot))
+    }
+
+    private func restoringDeletedTask(_ snapshot: TaskDeletion) throws -> LedgerData {
         guard !data.tasks.contains(where: { $0.id == snapshot.task.id }) else { throw LedgerError.conflict("此任务 ID 已存在，无法恢复删除；现有任务保持不变。") }
         var next = data
         var restored = snapshot.task
@@ -195,7 +243,7 @@ public final class WorkStore: ObservableObject {
         for index in next.tasks.indices where snapshot.predecessorIDs.contains(next.tasks[index].id) && next.tasks[index].nextTaskID == nil && next.tasks[index].completedAt != nil {
             next.tasks[index].nextTaskID = restored.id
         }
-        try commit(next)
+        return next
     }
 
     public func addAttachments(urls: [URL], to taskID: UUID) throws {
@@ -421,6 +469,11 @@ public final class WorkStore: ObservableObject {
         guard info.isRegularFile == true, info.isSymbolicLink != true, Int64(info.fileSize ?? -1) == attachment.size else { throw LedgerError.invalid("附件缺失、已损坏或不是普通文件：\(attachment.name)") }
     }
 
+    private nonisolated static func isValidDate(_ date: Date) -> Bool {
+        let seconds = date.timeIntervalSince1970
+        return seconds.isFinite && (-62_135_596_800..<253_402_300_800).contains(seconds)
+    }
+
     private nonisolated static func validate(_ ledger: LedgerData) throws {
         guard ledger.schemaVersion == 1 else { throw LedgerError.invalid("不支持此数据版本，请保留原文件并更新应用。") }
         guard Set(ledger.projects.map(\.id)).count == ledger.projects.count,
@@ -438,8 +491,8 @@ public final class WorkStore: ObservableObject {
         for task in ledger.tasks {
             if let projectID = task.projectID, !projectIDs.contains(projectID) { throw LedgerError.invalid("任务关联的项目不存在。") }
             guard !task.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("任务标题不能为空。") }
-            guard [task.createdAt, task.updatedAt].allSatisfy({ $0.timeIntervalSince1970.isFinite }),
-                  [task.dueAt, task.reminderAt, task.completedAt, task.plannedAt].compactMap({ $0 }).allSatisfy({ $0.timeIntervalSince1970.isFinite }) else { throw LedgerError.invalid("任务日期无效。") }
+            guard [task.createdAt, task.updatedAt].allSatisfy(Self.isValidDate),
+                  [task.dueAt, task.reminderAt, task.completedAt, task.plannedAt].compactMap({ $0 }).allSatisfy(Self.isValidDate) else { throw LedgerError.invalid("任务日期无效。") }
             guard task.planGranularity == nil || task.plannedAt != nil else { throw LedgerError.invalid("请先设置计划日期，再选择按天或按周安排。") }
             if let completed = task.completedAt, completed >= tomorrow { throw LedgerError.invalid("完成日期不能晚于今天。") }
             if let rule = task.repeatRule {
@@ -447,7 +500,7 @@ public final class WorkStore: ObservableObject {
                 guard rule.basis == .completion || task.dueAt != nil else { throw LedgerError.invalid("按固定日期循环需要设置截止日期。") }
             }
             if let anchor = task.scheduleAnchor {
-                guard anchor.date.timeIntervalSince1970.isFinite, (0...1_000_000).contains(anchor.occurrence),
+                guard Self.isValidDate(anchor.date), (0...1_000_000).contains(anchor.occurrence),
                       (1...10000).contains(anchor.rule.every), anchor.rule.basis == .schedule else { throw LedgerError.invalid("循环任务的日期锚点无效。") }
             }
             if let nextID = task.nextTaskID {
@@ -455,11 +508,11 @@ public final class WorkStore: ObservableObject {
             }
             for subtask in task.subtasks {
                 guard subtaskIDs.insert(subtask.id).inserted, !subtask.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("子任务 ID 重复或标题为空。") }
-                if let completed = subtask.completedAt, !completed.timeIntervalSince1970.isFinite || completed >= tomorrow { throw LedgerError.invalid("子任务完成日期无效或晚于今天。") }
+                if let completed = subtask.completedAt, !Self.isValidDate(completed) || completed >= tomorrow { throw LedgerError.invalid("子任务完成日期无效或晚于今天。") }
             }
             if let snapshot = task.completionSubtaskSnapshot {
                 guard Set(snapshot.map(\.id)).count == snapshot.count,
-                      snapshot.allSatisfy({ !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && ($0.completedAt.map { $0.timeIntervalSince1970.isFinite && $0 < tomorrow } ?? true) }) else { throw LedgerError.invalid("子任务完成快照无效。") }
+                      snapshot.allSatisfy({ !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && ($0.completedAt.map { Self.isValidDate($0) && $0 < tomorrow } ?? true) }) else { throw LedgerError.invalid("子任务完成快照无效。") }
             }
             guard Set(task.attachments.map(\.id)).count == task.attachments.count else { throw LedgerError.invalid("任务附件 ID 重复。") }
             for attachment in task.attachments {

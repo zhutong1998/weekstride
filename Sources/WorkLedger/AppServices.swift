@@ -132,7 +132,7 @@ final class AppServices: ObservableObject {
         if enabled {
             do {
                 guard !apiToken.isEmpty else { throw ServiceError.invalidToken }
-                try server.start(token: apiToken, store: store)
+                try server.start(token: apiToken, store: store, services: self)
                 apiEnabled = true
                 apiStatusMessage = "正在启动 http://127.0.0.1:18743"
                 UserDefaults.standard.set(true, forKey: "apiEnabled")
@@ -206,6 +206,16 @@ final class AppServices: ObservableObject {
     }
 
     func openLoginItemSettings() { SMAppService.openSystemSettingsLoginItems() }
+
+    var launchAtLoginRegistrationStatus: String {
+        switch SMAppService.mainApp.status {
+        case .enabled: return "enabled"
+        case .requiresApproval: return "requiresApproval"
+        case .notRegistered: return "notRegistered"
+        case .notFound: return "notFound"
+        @unknown default: return "unknown"
+        }
+    }
 
     private func refreshLaunchAtLoginStatus() {
         switch SMAppService.mainApp.status {

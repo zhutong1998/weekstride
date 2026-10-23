@@ -27,12 +27,14 @@ final class LocalAPIIntegrationTests: XCTestCase {
             session.invalidateAndCancel()
             try? FileManager.default.removeItem(at: directory)
         }
-        try server.start(token: token, store: store)
+        try server.start(token: token, store: store, port: .any)
         await fulfillment(of: [ready], timeout: 3)
+        var port = try XCTUnwrap(server.boundPort, "Do not send requests unless this test listener is ready")
 
-        func send(_ path: String, method: String = "GET", body: String? = nil, authorized: Bool = true, origin: Bool = false, bearer: String? = nil) async throws -> (Data, HTTPURLResponse) {
-            var request = URLRequest(url: URL(string: "http://127.0.0.1:18743\(path)")!)
+        func send(_ path: String, method: String = "GET", body: String? = nil, authorized: Bool = true, origin: Bool = false, bearer: String? = nil, host: String? = nil) async throws -> (Data, HTTPURLResponse) {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
             request.httpMethod = method
+            if let host { request.setValue(host, forHTTPHeaderField: "Host") }
             if authorized { request.setValue("Bearer \(bearer ?? token)", forHTTPHeaderField: "Authorization") }
             if origin { request.setValue("https://malicious.example", forHTTPHeaderField: "Origin") }
             if let body {
@@ -47,6 +49,10 @@ final class LocalAPIIntegrationTests: XCTestCase {
         XCTAssertEqual(unauthorized.1.statusCode, 401)
         let origin = try await send("/health", origin: true)
         XCTAssertEqual(origin.1.statusCode, 403)
+        let mismatchedPort = try await send("/health", host: "127.0.0.1:0")
+        XCTAssertEqual(mismatchedPort.1.statusCode, 403)
+        let localHost = try await send("/health", host: "localhost:\(port)")
+        XCTAssertEqual(localHost.1.statusCode, 200)
         let projects = try await send("/v1/projects")
         XCTAssertEqual(projects.1.statusCode, 200)
         XCTAssertEqual(try JSONDecoder().decode([Project].self, from: projects.0), [project])
@@ -218,12 +224,13 @@ final class LocalAPIIntegrationTests: XCTestCase {
         let replacementToken = String(repeating: "c", count: 64)
         let restarted = expectation(description: "loopback server restarted with new token")
         server.onStatus = { if $0.hasPrefix("已开启") { restarted.fulfill() } }
-        try server.start(token: token, store: store)
+        try server.start(token: token, store: store, port: .any)
         server.stop()
-        try server.start(token: token, store: store)
+        try server.start(token: token, store: store, port: .any)
         server.stop()
-        try server.start(token: replacementToken, store: store)
+        try server.start(token: replacementToken, store: store, port: .any)
         await fulfillment(of: [restarted], timeout: 3)
+        port = try XCTUnwrap(server.boundPort, "Do not send requests unless the replacement listener is ready")
         let staleToken = try await send("/health")
         XCTAssertEqual(staleToken.1.statusCode, 401, "重置后旧令牌不能访问")
         let newToken = try await send("/health", bearer: replacementToken)

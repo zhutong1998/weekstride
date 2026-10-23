@@ -16,7 +16,7 @@ WeekStride is a native macOS planner for project work, recurring responsibilitie
 - **A record of every completion.** Tasks and steps retain their completion dates. Completing a recurring task preserves the original and creates a separate next occurrence.
 - **Flexible task views.** Use one, two, or three columns, or an adaptive layout. Show full details or expand tasks from a titles-only view. Each project remembers its view and week filter.
 - **Local files and complete backups.** Drop files onto a task to copy them into local storage. Backups include projects, tasks, completion records, and referenced attachments.
-- **An optional local API.** Let trusted scripts or AI tools query tasks and mark work complete. Enable it yourself, authenticate with a token, and disable it or rotate the token at any time.
+- **An optional local API.** Let trusted scripts or AI tools manage projects, tasks, steps, plans, files, settings, and backups. Enable it yourself, authenticate with a token, and disable it or rotate the token at any time.
 
 ## Plan the week without losing the deadline
 
@@ -68,15 +68,16 @@ The legacy data identifier is retained for compatibility:
   attachments/    # Local attachment copies
   api-token       # Local API access token
   Backups/        # Safety copies created before restoring a backup
+  APIBackups/     # Managed snapshots created through the local API
 ```
 
 A `.workledgerbackup` folder contains task data and referenced attachments, excluding the API token and application preferences. Restoring a backup replaces the current work data after creating a safety copy. Export a backup before uninstalling the app or moving to another Mac.
 
 Data and backups are not additionally encrypted; they rely on your macOS account permissions and disk protection. Removing an attachment reference currently leaves the stored file in place to protect history and recurring tasks. Exported backups include only files still referenced by tasks.
 
-The local API is off by default and listens only on `127.0.0.1:18743`. The app must be running; closing its window can leave it running in the menu bar, while quitting stops the API. It supports queries and completion, with no attachment-content download or arbitrary file access. See the [local API guide](docs/API.md).
+The local API is off by default and listens only on `127.0.0.1:18743`. The app must be running; closing its window can leave it running in the menu bar, while quitting stops the API. It supports reading and changing work, uploading and downloading task attachments, managing backups, restoring work data, and changing application or project-view settings. It has no arbitrary filesystem access. API bootstrap and macOS notification permissions still require the app UI. See the [local API guide](docs/API.md) for discovery, examples, validation rules, and size limits.
 
-Only share the API token with trusted tools. WeekStride does not upload your work, but a cloud AI tool you authorize may send queried content to its own service.
+Only share the API token with trusted tools: it permits changes to work data, attachment contents, settings, and backup restoration. WeekStride does not upload your work, but a cloud AI tool you authorize may send queried content to its own service.
 
 ## Install
 

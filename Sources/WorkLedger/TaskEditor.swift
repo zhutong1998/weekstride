@@ -1008,7 +1008,10 @@ struct TaskCard: View, Equatable {
             .opacity(taskDragState.taskID == task.id ? 0.48 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: taskDragState.taskID == task.id)
             .overlay(alignment: .bottom) {
-                if showsDetails { footer.alignmentGuide(.bottom) { $0[VerticalAlignment.center] } }
+                if showsDetails {
+                    footer.fixedSize(horizontal: false, vertical: true)
+                        .frame(height: 0, alignment: .center)
+                }
             }
             Color.clear
                 .frame(height: showActions ? 20 : 4)

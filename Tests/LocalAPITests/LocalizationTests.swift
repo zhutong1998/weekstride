@@ -30,6 +30,40 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLocalization.label(userText, languageIdentifier: "zh-Hans"), userText)
     }
 
+    func testTaskDisplayOptionTitlesFollowLanguageChanges() {
+        withAppLanguage("zh-Hans") {
+            XCTAssertEqual(TaskColumnMode.allCases.map(\.title), ["每行一个", "每行两个", "每行三个", "自适应"])
+            XCTAssertEqual(TaskDetailsMode.allCases.map(\.title), ["完整详情", "仅标题"])
+        }
+        withAppLanguage("en") {
+            XCTAssertEqual(TaskColumnMode.allCases.map(\.title), ["One per row", "Two per row", "Three per row", "Automatic"])
+            XCTAssertEqual(TaskDetailsMode.allCases.map(\.title), ["Full details", "Titles only"])
+        }
+        withAppLanguage("zh-Hans") { XCTAssertEqual(TaskColumnMode.two.title, "每行两个") }
+    }
+
+    func testAllSettingsChoiceTitlesResolveToEnglish() {
+        withAppLanguage("en") {
+            XCTAssertEqual(AppAppearance.allCases.map(\.title), ["Follow system", "Light", "Dark"])
+            XCTAssertEqual(AppTextSize.allCases.map(\.title), ["Small", "Standard", "Large", "Extra large"])
+            XCTAssertEqual(AppLanguage.allCases.map(\.title), ["Follow system", "Simplified Chinese", "English"])
+            XCTAssertEqual(AppTimeFormat.allCases.map(\.title), ["Follow system", "12-hour", "24-hour"])
+            XCTAssertEqual(TaskListEffect.allCases.map(\.title), ["Slide", "Slide & fade", "Scale & fade", "Off"])
+            let history = HistoryRange.allCases.map { localizedLabel($0.rawValue) }
+            XCTAssertEqual(history, ["Work period", "Custom dates", "All history"])
+            let shortcuts = TaskDateShortcut.allCases.map { localizedLabel($0.rawValue) }
+            XCTAssertEqual(shortcuts, ["Today", "Tomorrow", "Next week", "Next month"])
+        }
+    }
+
+    private func withAppLanguage(_ language: String, _ check: () -> Void) {
+        let defaults = UserDefaults.standard
+        let previous = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defaults.setVolatileDomain(previous.merging(["appLanguage": language]) { _, value in value }, forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(previous, forName: UserDefaults.argumentDomain) }
+        check()
+    }
+
     func testTwelveHourClockRoundTripsMidnightNoonAndAfternoon() {
         for hour in 0..<24 {
             let displayed = TaskCalendarGrid.displayHour(hour, twelveHour: true)

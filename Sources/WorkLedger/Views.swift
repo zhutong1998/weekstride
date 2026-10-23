@@ -123,7 +123,7 @@ struct RootView: View {
     @State private var pendingListStructure: TaskListStructure?
     @State private var listSlide: TaskListSlide?
     @FocusState private var sidebarFocus: SidebarItem?
-    @FocusState private var searchFocused: Bool
+    @State private var searchFocused = false
 
     init(store: WorkStore) {
         self.store = store
@@ -475,6 +475,12 @@ struct RootView: View {
         .onChange(of: selection) { _, _ in topVisibleTask = nil; loadDisplaySetting() }
         .onChange(of: defaultColumns) { _, _ in loadDisplaySetting() }
         .onChange(of: defaultDetails) { _, _ in loadDisplaySetting() }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("WorkLedger.viewPreferencesChanged"))) { note in
+            guard let scope = note.object as? String, scope == (selection ?? .all).planFilterPreferenceKey else { return }
+            loadDisplaySetting()
+            let filter = PlanFilterPreferences().filter(for: scope)
+            if filter != planFilter { setListLocation(selection, filter: filter) }
+        }
         .sheet(isPresented: $showNewProject) { ProjectEditor() }
         .onReceive(TaskListStructure.changes(in: store, search: search)) { next in
             receiveListStructure(next)
@@ -592,23 +598,10 @@ struct RootView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(L("搜索任务、备注、附件"), text: $search)
-                .textFieldStyle(.plain).focused($searchFocused)
-                .onExitCommand(perform: clearSearchFocus)
-                .accessibilityLabel(L("搜索任务、备注、附件"))
-            if !search.isEmpty {
-                Button { search = ""; clearSearchFocus() } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 20, height: 20)
-                }.buttonStyle(HoverHighlightButtonStyle(cornerRadius: 10)).help(L("清除搜索")).accessibilityLabel(L("清除搜索"))
-            }
-        }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .frame(width: 180)
-        .background(Color.primary.opacity(0.045), in: Capsule())
-        .overlay(Capsule().strokeBorder(searchFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.08), lineWidth: 1))
-        .help(L("搜索任务、备注和附件（⌘F），按 Esc 退出搜索输入"))
+        NativeTaskSearchField(text: $search, focused: Binding(get: { searchFocused }, set: { searchFocused = $0 }),
+                              placeholder: L("搜索任务、备注、附件"))
+            .frame(width: 190, height: 28 * textSize.scale)
+            .help(L("搜索任务、备注和附件（⌘F），按 Esc 退出搜索输入"))
     }
 
     private func clearSearchFocus() {
@@ -944,18 +937,25 @@ struct RootView: View {
             : TaskPlanFilter.options(for: planningTasks + completedTasks, relativeTo: planningToday, firstWeekday: weekStart)
         return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    ForEach(filters) { filter in
-                        planningFilterTab(filter, count: filter == .all ? tasks.count : (counts[filter] ?? 0))
-                            .id(filter)
-                    }
-                }.padding(.vertical, 2)
+                planningFilterTabs(filters, counts: counts, totalCount: tasks.count)
             }
             .scrollIndicators(.hidden)
             .onChange(of: selection) { _, _ in proxy.scrollTo(TaskPlanFilter.all, anchor: .leading) }
-            .onChange(of: planFilter) { _, filter in proxy.scrollTo(filter, anchor: filter == .all || filter == .thisWeek ? .leading : .center) }
+            .onChange(of: planFilter) { _, filter in
+                let anchor: UnitPoint = filter == TaskPlanFilter.all || filter == TaskPlanFilter.thisWeek ? .leading : .center
+                proxy.scrollTo(filter, anchor: anchor)
+            }
         }
         .frame(height: filters.isEmpty ? 0 : 32)
+    }
+
+    private func planningFilterTabs(_ filters: [TaskPlanFilter], counts: [TaskPlanFilter: Int], totalCount: Int) -> some View {
+        HStack(spacing: 6) {
+            ForEach(filters) { filter in
+                planningFilterTab(filter, count: filter == .all ? totalCount : (counts[filter] ?? 0))
+                    .id(filter)
+            }
+        }.padding(.vertical, 2)
     }
 
     private func planningFilterTab(_ filter: TaskPlanFilter, count: Int) -> PlanningDropTab {
@@ -998,6 +998,7 @@ struct RootView: View {
                 loadDisplaySetting()
             }
         } label: { Image(systemName: "rectangle.grid.2x2") }
+        .id(language.localeIdentifier)
         .help(L("任务显示：列数与详情模式，当前项目独立记忆"))
         .accessibilityLabel(L("任务显示方式"))
     }
@@ -1076,6 +1077,57 @@ struct RootView: View {
 
     private func shiftWeek(_ direction: Int) {
         weekAnchor = Calendar.current.date(byAdding: .day, value: direction * 7, to: weekAnchor) ?? weekAnchor
+    }
+}
+
+private struct NativeTaskSearchField: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    let placeholder: String
+    @Environment(\.appTextScale) private var textScale
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField(string: text)
+        field.controlSize = .small
+        field.sendsSearchStringImmediately = true
+        field.sendsWholeSearchString = false
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+        field.placeholderString = placeholder
+        field.setAccessibilityLabel(placeholder)
+        field.font = .systemFont(ofSize: 12 * textScale)
+        if field.stringValue != text { field.stringValue = text }
+        let hasFocus = field.currentEditor() != nil || field.window?.firstResponder === field
+        guard focused != hasFocus, let window = field.window else { return }
+        let requestedFocus = focused
+        DispatchQueue.main.async { [weak field, weak coordinator = context.coordinator] in
+            guard let field, let coordinator, field.window === window, coordinator.parent.focused == requestedFocus else { return }
+            if requestedFocus { window.makeFirstResponder(field) }
+            else if field.currentEditor() != nil || window.firstResponder === field { window.makeFirstResponder(nil) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: NativeTaskSearchField
+        init(_ parent: NativeTaskSearchField) { self.parent = parent }
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            parent.text = field.stringValue
+        }
+        func controlTextDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
+        func controlTextDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            parent.focused = false
+            control.window?.makeFirstResponder(nil)
+            return true
+        }
     }
 }
 
