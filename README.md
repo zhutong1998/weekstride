@@ -1,10 +1,14 @@
 # WeekStride
 
-**Plan your working week. Keep the details and the next action in view.**
+**Focus on this week. See the work in context. Connect your tools.**
 
-WeekStride is a native macOS planner for individual project and operations work: the tasks you need to move forward this week, the dates you need to watch, and the recurring jobs you need to remember next time.
+WeekStride is a native macOS weekly planner for individual project and operations work: the tasks you need to move forward this week, the dates you need to watch, and the recurring jobs you need to remember next time.
 
-Its main focus is the working task list. You can review several projects, read the instructions and previous notes, work through steps, open the relevant files, and record completion from one screen. Organize that work by week, then add precise deadlines and reminders wherever they are needed.
+The design has three primary pillars:
+
+- **Focus on this week.** Bring this week's commitments and unfinished earlier plans into one working view, with projects and future weeks available when you need them.
+- **Local API for AI tools and scripts.** Let tools you choose query and manage the same work data through an API that you enable manually and authenticate with a token.
+- **Read the full task context directly in the list.** In full-detail mode, see instructions, steps, notes, attachments, and dates on the task card, and edit in place without opening a separate detail page for each task.
 
 Your work stays on your Mac. No account or cloud service is required, and automation is available through an optional local API that you enable and control.
 
@@ -25,35 +29,41 @@ WeekStride suits people who handle many small pieces of work across projects and
 
 It is built around one person's work on one Mac. Shared assignment, team permissions, mobile clients, and cloud sync are outside the current feature set.
 
-## What the design focuses on
+## Three primary pillars
 
-### A working week you can actually use
+### 1. Focus on this week
 
-Some work belongs in this week's plan before it has an exact deadline. Other work has a firm expiry date but can be handled on several different days. WeekStride records those decisions separately, so rescheduling your plan preserves the deadline and reminder.
+The current week is the main working horizon. Review commitments across projects, keep overdue planned work visible, and move tasks into a later week when priorities change. Future plans and unscheduled tasks stay available through their own filters, while actual completions appear below the remaining work for their completion week.
 
 The working week can start on any weekday. If your reporting cycle runs Thursday through Wednesday, weekly groups, counts, and completion history follow that cycle. Overdue planned work stays visible in the current week until you complete or reschedule it.
 
-### Enough context to act on a task
+### 2. Local API for AI tools and scripts
 
-A task card can show its instructions, execution steps, notes, attachments, and dates together. Details are editable in place. Full-detail and multi-column views support reviewing several tasks at once; titles-only mode provides a compact list with details available on expansion.
+The local API lets a trusted tool work with the same projects and records you see in the app. A script can query this week's tasks, an AI tool can add a follow-up with notes and steps, or an automation can complete a task after its work succeeds. The API also covers project and task editing, planning, attachments, settings, managed backups, and confirmed backup restoration.
 
-Projects give the work a home, while each project remembers its preferred view and week filter. A file dropped onto a task becomes a local attachment copy, keeping the material with the work across later reviews and recurring occurrences.
+There is no built-in AI provider or AI subscription in WeekStride. You choose the tool, enable the API manually, and supply its access token. The server listens only on the local loopback address; you can stop it or rotate the token from the app. Initial activation and macOS permission decisions remain under your control.
 
-### Completion that leaves a useful record
+The API can read attachment contents and change work data, so its token should be given only to trusted tools. A cloud AI tool may send that data to its own service. The [API guide](docs/API.md) documents the complete operations, confirmation requirements, and limits.
+
+### 3. Full task context, directly in the list
+
+Full-detail mode displays each task's instructions, execution steps, notes, attachments, and dates together on its card. You can read and compare the working context while scanning the list, without opening individual task-detail pages. Text is editable in place; controls such as date pickers open only when you need to change their values.
+
+Use one, two, or three columns, or an adaptive layout, to review several tasks at once. Titles-only mode is an optional compact view with details available on expansion. Each project remembers its preferred display mode and week filter, and tasks can also exist without a project.
+
+A file dropped onto a task becomes a local attachment copy, keeping the supporting material with the work across later reviews and recurring occurrences.
+
+## Supporting choices
+
+### Completion history and separate recurring occurrences
 
 Finishing a task records what was completed and when. A recurring task produces a new occurrence while retaining the finished record. You can review actual completions for a working week even when those tasks were originally planned earlier.
 
 This supports two separate questions during a weekly review: what still needs attention, and what was actually finished? Changing a recorded completion date does not silently rewrite the dates of a later recurring task.
 
-## Features
+### Independent plans, deadlines, and reminders
 
-- **A week that fits your schedule.** Choose any day as the start of your working week, such as Thursday through Wednesday. Planning groups and completion history follow that setting.
-- **Project tasks with inline details.** Read and edit task details, steps, notes, attachments, and dates directly on each card. Tasks can also exist without a project.
-- **Separate planning, deadlines, and reminders.** Decide when to work on something, when it must be finished, and when to receive a notification independently.
-- **A record of every completion.** Tasks and steps retain their completion dates. Completing a recurring task preserves the original and creates a separate next occurrence.
-- **Flexible task views.** Use one, two, or three columns, or an adaptive layout. Show full details or expand tasks from a titles-only view. Each project remembers its view and week filter.
-- **Local files and complete backups.** Drop files onto a task to copy them into local storage. Backups include projects, tasks, completion records, and referenced attachments.
-- **An optional local API.** Let trusted scripts or AI tools manage projects, tasks, steps, plans, files, settings, and backups. Enable it yourself, authenticate with a token, and disable it or rotate the token at any time.
+Some work belongs in this week's plan before it has an exact deadline. Other work has a firm expiry date but can be handled on several different days. WeekStride records those decisions separately, so rescheduling your plan preserves the deadline and reminder.
 
 ## Plan the week without losing the deadline
 
@@ -93,14 +103,6 @@ The next due date and reminder are calculated from the recurrence rule. Check th
 6. Complete the work and review its history. Supported operations can be undone from the feedback bar or with `Command-Z`.
 
 Drag a task to a sidebar project to move it, or to All tasks to remove its project assignment. Drop it onto a week tab to reschedule it. Moving a task or changing its plan preserves its text, other dates, steps, and attachments.
-
-## Automation you choose to enable
-
-The local API is intended to let a trusted tool work with the same projects and records you see in the app. For example, a script can query this week's tasks, an AI tool can add a follow-up with notes and steps, or an automation can complete a task after its work succeeds. The API also covers attachments, settings, managed backups, and confirmed backup restoration.
-
-There is no built-in AI provider or AI subscription in WeekStride. You choose the tool, enable the API manually, and supply its access token. The server listens only on the local loopback address; you can stop it or rotate the token from the app. Initial activation and macOS permission decisions remain under your control.
-
-The API can read attachment contents and change work data, so its token should be given only to trusted tools. A cloud AI tool may send that data to its own service. The [API guide](docs/API.md) documents the complete operations, confirmation requirements, and limits.
 
 ## Appearance and settings
 
