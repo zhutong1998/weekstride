@@ -153,6 +153,10 @@ final class TaskReminderPlanTests: XCTestCase {
     }
 
     func testTaskIssueExplainsPermissionFailureAndReachedReminder() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defaults.setVolatileDomain(previous.merging(["appLanguage": "zh-Hans"]) { _, value in value }, forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(previous, forName: UserDefaults.argumentDomain) }
         var task = WorkTask(title: "提醒状态", reminderAt: now.addingTimeInterval(60))
         XCTAssertNil(AppServices.reminderIssue(for: task, authorization: .authorized, error: nil, now: now))
         XCTAssertTrue(AppServices.reminderIssue(for: task, authorization: .notDetermined, error: nil, now: now)!.contains("尚未开启通知"))

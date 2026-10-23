@@ -30,7 +30,9 @@ enum AppLocalization {
     private static let chineseBundle = localizedBundle("zh-Hans")
 
     private static func localizedBundle(_ language: String) -> Bundle {
-        guard let url = resourceBundle.url(forResource: language, withExtension: "lproj"),
+        // SwiftPM's native builder lowercases localization folder names; Xcode preserves them.
+        guard let url = resourceBundle.url(forResource: language, withExtension: "lproj")
+                ?? resourceBundle.url(forResource: language.lowercased(), withExtension: "lproj"),
               let bundle = Bundle(url: url) else { return resourceBundle }
         return bundle
     }

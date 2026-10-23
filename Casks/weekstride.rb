@@ -1,6 +1,6 @@
 cask "weekstride" do
   version "0.8.1,67"
-  sha256 "f838c11395f781cdf4477efd06f81330331d1d5a8ebab80555ad7fd1c3196c9d"
+  sha256 "ea7f7ba2610d27126eaa15ac90d070260c86f50d3bda08d10df3fbfef06979d1"
 
   url "https://github.com/zhutong1998/weekstride/releases/download/v#{version.csv.first}/weekstride-#{version.csv.first}-#{version.csv.second}-macos-arm64.zip"
   name "WeekStride"

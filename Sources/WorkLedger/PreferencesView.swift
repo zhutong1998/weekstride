@@ -84,10 +84,10 @@ struct PreferencesView: View {
             Section(L("语言与时间")) {
                 Picker(L("语言"), selection: $language) {
                     ForEach(AppLanguage.allCases) { item in Text(item.title).tag(item) }
-                }.id(language.localeIdentifier)
+                }.id("language.\(language.localeIdentifier)")
                 Picker(L("时间格式"), selection: $timeFormat) {
                     ForEach(AppTimeFormat.allCases) { item in Text(item.title).tag(item) }
-                }.id(language.localeIdentifier)
+                }.id("timeFormat.\(language.localeIdentifier)")
                 Text(L("语言只改变界面和日期显示，任务内容与工作周期保持原样。"))
                     .appFont(.caption).foregroundStyle(.secondary)
             }
@@ -103,7 +103,7 @@ struct PreferencesView: View {
             Section(L("工作周期")) {
                 Picker(L("每周开始日"), selection: $weekStart) {
                     ForEach(weekdayChoices, id: \.0) { value, title in Text(title).tag(value) }
-                }.id(language.localeIdentifier)
+                }.id("weekStart.\(language.localeIdentifier)")
                 let range = WorkPeriod.range(containing: Date(), firstWeekday: weekStart)
                 Text(L("当前周期：\(dateText(range.start)) — \(dateText(range.end.addingTimeInterval(-1)))"))
                     .appFont(.caption).foregroundStyle(.secondary)
@@ -118,10 +118,10 @@ struct PreferencesView: View {
             Section(L("外观与阅读")) {
                 Picker(L("颜色模式"), selection: $appearance) {
                     ForEach(AppAppearance.allCases) { item in Text(item.title).tag(item) }
-                }.id(language.localeIdentifier)
+                }.id("appearance.\(language.localeIdentifier)")
                 Picker(L("字体大小"), selection: $textSize) {
                     ForEach(AppTextSize.allCases) { item in Text(item.title).tag(item) }
-                }.id(language.localeIdentifier)
+                }.id("textSize.\(language.localeIdentifier)")
                 VStack(alignment: .leading, spacing: 8) {
                     Label(L("检查域名证书"), systemImage: "circle")
                         .appFont(.system(size: 15, weight: .semibold))
@@ -138,17 +138,17 @@ struct PreferencesView: View {
             Section(L("任务显示默认值")) {
                 Picker(L("列数"), selection: $columns) {
                     ForEach(TaskColumnMode.allCases) { item in Text(item.title).tag(item) }
-                }.id(language.localeIdentifier)
+                }.id("columns.\(language.localeIdentifier)")
                 Picker(L("默认内容"), selection: $details) {
                     ForEach(TaskDetailsMode.allCases) { item in Text(item.title).tag(item) }
-                }.id(language.localeIdentifier)
+                }.id("details.\(language.localeIdentifier)")
                 Text(L("各项目可单独记住显示方式。空间不足或字体较大时会减少列数，保持任务可读。"))
                     .appFont(.caption).foregroundStyle(.secondary)
             }
             Section(L("列表切换效果")) {
                 Picker(L("切换效果"), selection: $listEffect) {
                     ForEach(TaskListEffect.allCases) { effect in Text(effect.title).tag(effect) }
-                }.id(language.localeIdentifier)
+                }.id("listEffect.\(language.localeIdentifier)")
                 Text(listEffect.summary).appFont(.caption).foregroundStyle(.secondary)
                 Text(L("项目上下切换，周标签左右切换；时长为 0.18 秒，并遵循系统的“减少动态效果”。"))
                     .appFont(.caption).foregroundStyle(.secondary)

@@ -11,6 +11,8 @@ final class LocalizationTests: XCTestCase {
     }
 
     func testBothLanguagesResolveUsingTheirOwnBundle() {
+        XCTAssertEqual(AppLocalization.bundle(for: "zh-Hans").bundleURL.lastPathComponent.lowercased(), "zh-hans.lproj")
+        XCTAssertEqual(AppLocalization.bundle(for: "en").bundleURL.lastPathComponent, "en.lproj")
         XCTAssertEqual(AppLocalization.string("本周任务", languageIdentifier: "en"), "This week")
         XCTAssertEqual(AppLocalization.string("本周任务", languageIdentifier: "zh-Hans"), "本周任务")
         XCTAssertEqual(AppLocalization.string("共 \(3) 项任务", languageIdentifier: "en"), "3 tasks")
