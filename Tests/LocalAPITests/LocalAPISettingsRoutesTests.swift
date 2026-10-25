@@ -46,6 +46,7 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
             }
             XCTAssertEqual(settings["remindersEnabled"] as? Bool, true)
             XCTAssertEqual(settings["runInMenuBar"] as? Bool, true)
+            XCTAssertEqual(settings["reverseTabSwipe"] as? Bool, false)
             let status = try object(request("/v1/settings/status"), defaults: defaults, store: store)
             XCTAssertEqual(status["servicesAvailable"] as? Bool, false)
             XCTAssertEqual(status["canChangeReminders"] as? Bool, false)
@@ -107,6 +108,8 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
                            #"{"taskListEffect":"fade"}"#, #"{"apiEnabled":false}"#, #"{"apiToken":"secret"}"#,
                            #"{"runInMenuBar":"false"}"#, #"{"runInMenuBar":1}"#, #"{"runInMenuBar":null}"#,
                            #"{"runInMenuBar":false,"weekStart":9}"#, #"{"remindersEnabled":1}"#, #"{"launchAtLogin":null}"#,
+                           #"{"reverseTabSwipe":"true"}"#, #"{"reverseTabSwipe":1}"#, #"{"reverseTabSwipe":null}"#,
+                           #"{"appLanguage":"en","reverseTabSwipe":0}"#, #"{"reverseTabSwipe":true,"weekStart":9}"#,
                            #"{"appLanguage":"en","remindersEnabled":false}"#, #"{"appLanguage":"en","launchAtLogin":true}"#,
                            #"{"appLanguage":"en","weekStart":9}"#, #"{"appLanguage":"en","appLanguage":"system"}"#]
             for body in invalid {
@@ -118,6 +121,26 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
             reject(request(method: "POST", body: "{}"), status: 405, defaults: defaults, store: store)
             reject(request("/v1/settings/api/disable", method: "POST"), defaults: defaults, store: store)
             reject(request("/v1/settings/api/rotate-token", method: "POST"), defaults: defaults, store: store)
+        }
+    }
+
+    func testReverseTabSwipeRoundTripsAndSurvivesPartialSettingsPatch() throws {
+        try fixture { defaults, store in
+            let before = store.data
+            defaults.set("dark", forKey: "appAppearance")
+            for reversed in [true, false] {
+                let result = try object(request(method: "PATCH", body: "{\"reverseTabSwipe\":\(reversed)}"), defaults: defaults, store: store)
+                XCTAssertEqual(result["reverseTabSwipe"] as? Bool, reversed)
+                XCTAssertEqual(defaults.object(forKey: "reverseTabSwipe") as? Bool, reversed)
+                let current = try object(request(), defaults: defaults, store: store)
+                XCTAssertEqual(current["reverseTabSwipe"] as? Bool, reversed)
+                XCTAssertEqual(defaults.string(forKey: "appAppearance"), "dark")
+                XCTAssertEqual(store.data, before)
+            }
+            defaults.set(true, forKey: "reverseTabSwipe")
+            let result = try object(request(method: "PATCH", body: #"{"weekStart":2}"#), defaults: defaults, store: store)
+            XCTAssertEqual(result["reverseTabSwipe"] as? Bool, true)
+            XCTAssertEqual(defaults.object(forKey: "reverseTabSwipe") as? Bool, true)
         }
     }
 

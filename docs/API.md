@@ -291,6 +291,7 @@ Use these raw values, rather than translated UI labels:
 | `taskListEffect` | `slide`, `slideFade`, `scaleFade`, `none` |
 | `remindersEnabled` | Boolean |
 | `runInMenuBar` | Boolean; default `true`; shows or hides the menu bar icon without quitting the app |
+| `reverseTabSwipe` | Boolean; default `false`; reverses two-finger horizontal swipes between tabs |
 | `launchAtLogin` | Boolean; requires a running `.app` bundle and application services |
 
 ```bash

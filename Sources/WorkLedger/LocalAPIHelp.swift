@@ -178,6 +178,7 @@ enum LocalAPIHelp {
             <li><code>taskColumns</code>: <code>one|two|three|automatic</code>; <code>taskDetails</code>: <code>expanded|titles</code>.</li>
             <li><code>taskListEffect</code>: <code>slide|slideFade|scaleFade|none</code>; <code>remindersEnabled</code> and <code>launchAtLogin</code>: booleans.</li>
             <li><code>runInMenuBar</code>: boolean, default <code>true</code>. Show or hide the menu bar icon; this does not quit the app.</li>
+            <li><code>reverseTabSwipe</code>: boolean, default <code>false</code>. Reverse two-finger horizontal swipes between tabs.</li>
           </ul>
           <p><code>GET /v1/settings/status</code> reports service availability and permissions. Notification permission and test notifications
           require the app UI; login registration may require macOS approval. Global display changes preserve project overrides.</p>

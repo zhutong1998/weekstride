@@ -58,7 +58,7 @@ enum LocalAPISettingsRoutes {
     }
 
     private static func updateSettings(_ request: LocalAPIRequest, defaults: UserDefaults, services: AppServices?) throws {
-        let allowed = Set(enumValues.keys).union(["weekStart", "remindersEnabled", "launchAtLogin", "runInMenuBar"])
+        let allowed = Set(enumValues.keys).union(["weekStart", "remindersEnabled", "launchAtLogin", "runInMenuBar", "reverseTabSwipe"])
         let json = try LocalAPIJSON(request, allowed: allowed)
         guard !json.raw.isEmpty else { throw invalid("Include at least one setting to change.") }
         var changes: [String: Any] = [:]
@@ -75,6 +75,7 @@ enum LocalAPISettingsRoutes {
         let reminders = try json.bool("remindersEnabled")
         let login = try json.bool("launchAtLogin")
         if let value = try json.bool("runInMenuBar") { changes["runInMenuBar"] = value }
+        if let value = try json.bool("reverseTabSwipe") { changes["reverseTabSwipe"] = value }
         if reminders != nil || login != nil {
             guard services != nil else { throw invalid("Changing reminders or login items requires the running application services.") }
         }
@@ -171,6 +172,7 @@ enum LocalAPISettingsRoutes {
         let taskListEffect: String
         let remindersEnabled: Bool
         let runInMenuBar: Bool
+        let reverseTabSwipe: Bool
         let status: Status
 
         @MainActor init(defaults: UserDefaults, services: AppServices?) {
@@ -184,6 +186,7 @@ enum LocalAPISettingsRoutes {
             taskListEffect = (TaskListEffect(rawValue: defaults.string(forKey: "taskListEffect") ?? "") ?? .slide).rawValue
             remindersEnabled = services?.remindersEnabled ?? (defaults.object(forKey: "remindersEnabled") as? Bool ?? true)
             runInMenuBar = defaults.object(forKey: "runInMenuBar") as? Bool ?? true
+            reverseTabSwipe = defaults.object(forKey: "reverseTabSwipe") as? Bool ?? false
             status = Status(defaults: defaults, services: services)
         }
     }

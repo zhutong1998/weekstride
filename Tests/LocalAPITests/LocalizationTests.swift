@@ -25,6 +25,8 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLocalization.string("打开工作清单", languageIdentifier: "en"), "Open WeekStride")
         XCTAssertEqual(AppLocalization.string("显示菜单栏图标", languageIdentifier: "en"), "Show menu bar icon")
         XCTAssertEqual(AppLocalization.string("隐藏菜单栏图标", languageIdentifier: "en"), "Hide menu bar icon")
+        XCTAssertEqual(AppLocalization.string("反转左右滑动方向", languageIdentifier: "en"), "Reverse horizontal swipe direction")
+        XCTAssertEqual(AppLocalization.string("反转左右滑动方向", languageIdentifier: "zh-Hans"), "反转左右滑动方向")
         XCTAssertEqual(AppLocalization.string("本周待办 \(3) 项", languageIdentifier: "en"), "This week · 3 unfinished tasks")
         XCTAssertEqual(AppLocalization.string("工作清单-\("2026-10-23").workledgerbackup", languageIdentifier: "zh-Hans"), "WeekStride-2026-10-23.workledgerbackup")
     }

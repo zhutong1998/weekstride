@@ -7,6 +7,7 @@ struct PreferencesView: View {
     @EnvironmentObject private var services: AppServices
     @AppStorage("weekStart") private var weekStart = 5
     @AppStorage("taskListEffect") private var listEffect: TaskListEffect = .slide
+    @AppStorage("reverseTabSwipe") private var reverseTabSwipe = false
     @AppStorage("appAppearance") private var appearance: AppAppearance = .system
     @AppStorage("appTextSize") private var textSize: AppTextSize = .standard
     @AppStorage("appLanguage") private var language: AppLanguage = .system
@@ -148,6 +149,9 @@ struct PreferencesView: View {
                     .appFont(.caption).foregroundStyle(.secondary)
             }
             Section(L("列表切换效果")) {
+                Toggle(L("反转左右滑动方向"), isOn: $reverseTabSwipe)
+                Text(L("反转触控板双指和鼠标横向滑动切换周标签的方向，立即生效。"))
+                    .appFont(.caption).foregroundStyle(.secondary)
                 Picker(L("切换效果"), selection: $listEffect) {
                     ForEach(TaskListEffect.allCases) { effect in Text(effect.title).tag(effect) }
                 }.id("listEffect.\(language.localeIdentifier)")

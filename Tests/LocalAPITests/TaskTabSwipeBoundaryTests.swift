@@ -214,4 +214,38 @@ final class TaskTabSwipeBoundaryTests: XCTestCase {
         XCTAssertEqual(fixture.directions, [.next, .previous])
         XCTAssertEqual(vertical.invalidPropertyReads, [])
     }
+
+    func testReverseSettingSwapsBothDirectionsForScrollAndDiscreteSwipes() {
+        for reversed in [false, true] {
+            let fixture = Fixture()
+            defer { fixture.close() }
+            fixture.boundary.reverseDirection = reversed
+            for (index, delta) in [CGFloat(1), -1].enumerated() {
+                let time = Double(index + 1)
+                _ = fixture.boundary.process(fixture.event(phase: .began, time: time))
+                _ = fixture.boundary.process(fixture.event(x: delta * 40, phase: .changed, time: time + 0.01))
+            }
+            _ = fixture.boundary.process(fixture.event(x: 1, time: 3, kind: .swipe))
+            _ = fixture.boundary.process(fixture.event(x: -1, time: 4, kind: .swipe))
+            XCTAssertEqual(fixture.directions, reversed ? [.previous, .next, .previous, .next] : [.next, .previous, .next, .previous])
+        }
+    }
+
+    func testChangingReverseSettingKeepsTheCurrentGestureAndDoesNotRepeatNavigation() {
+        let fixture = Fixture()
+        defer { fixture.close() }
+        _ = fixture.boundary.process(fixture.event(phase: .began))
+        _ = fixture.boundary.process(fixture.event(x: 18, phase: .changed, time: 1.01))
+        fixture.boundary.reverseDirection = true
+        fixture.boundary.setEnabled(true)
+        _ = fixture.boundary.process(fixture.event(x: 18, phase: .changed, time: 1.02))
+        XCTAssertEqual(fixture.directions, [.previous])
+        fixture.boundary.reverseDirection = false
+        fixture.boundary.setEnabled(true)
+        _ = fixture.boundary.process(fixture.event(x: 80, phase: .changed, time: 1.03))
+        XCTAssertEqual(fixture.directions, [.previous])
+        _ = fixture.boundary.process(fixture.event(phase: .began, time: 2))
+        _ = fixture.boundary.process(fixture.event(x: 40, phase: .changed, time: 2.01))
+        XCTAssertEqual(fixture.directions, [.previous, .next])
+    }
 }

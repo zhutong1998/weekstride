@@ -1,7 +1,10 @@
 import AppKit
 import SwiftUI
 
-enum TaskTabSwipeDirection: Equatable { case previous, next }
+enum TaskTabSwipeDirection: Equatable {
+    case previous, next
+    var reversed: Self { self == .next ? .previous : .next }
+}
 
 struct TaskTabSwipeDecision: Equatable {
     var direction: TaskTabSwipeDirection?
@@ -96,12 +99,14 @@ struct TaskTabSwipeTracker {
 
 struct TaskTabSwipeBoundary: NSViewRepresentable {
     let enabled: Bool
+    var reverseDirection = false
     let onSwipe: (TaskTabSwipeDirection) -> Void
 
     func makeNSView(context: Context) -> BoundaryView { BoundaryView() }
 
     func updateNSView(_ view: BoundaryView, context: Context) {
         view.onSwipe = onSwipe
+        view.reverseDirection = reverseDirection
         view.setEnabled(enabled)
     }
 
@@ -111,6 +116,7 @@ struct TaskTabSwipeBoundary: NSViewRepresentable {
 
     final class BoundaryView: NSView {
         var onSwipe: ((TaskTabSwipeDirection) -> Void)?
+        var reverseDirection = false
         private var monitor: Any?
         private var tracker = TaskTabSwipeTracker()
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -140,7 +146,7 @@ struct TaskTabSwipeBoundary: NSViewRepresentable {
                     vertical: TaskTabSwipeTracker.normalizedDelta(event.scrollingDeltaY, inverted: inverted, precise: event.hasPreciseScrollingDeltas),
                     phase: event.phase, momentum: event.momentumPhase, timestamp: event.timestamp)
             }
-            if let direction = decision.direction { onSwipe?(direction) }
+            if let direction = decision.direction { onSwipe?(reverseDirection ? direction.reversed : direction) }
             return decision.consumesEvent ? nil : event
         }
 

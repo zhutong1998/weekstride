@@ -146,6 +146,7 @@ struct RootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("weekStart") private var weekStart = 5
     @AppStorage("taskListEffect") private var listEffect: TaskListEffect = .slide
+    @AppStorage("reverseTabSwipe") private var reverseTabSwipe = false
     @AppStorage("taskColumns") private var defaultColumns: TaskColumnMode = .one
     @AppStorage("taskDetails") private var defaultDetails: TaskDetailsMode = .expanded
     @AppStorage("appTextSize") private var textSize: AppTextSize = .standard
@@ -521,6 +522,7 @@ struct RootView: View {
                     .clipped()
                 }
                 .background(TaskTabSwipeBoundary(enabled: !isHistory && !isTimeSensitive && selection != .thisWeek && dragState.taskID == nil,
+                                                 reverseDirection: reverseTabSwipe,
                                                  onSwipe: swipePlanFilter))
                 operationBar
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: operationNotice != nil)

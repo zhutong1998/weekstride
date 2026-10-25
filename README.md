@@ -106,6 +106,8 @@ Drag a task to a sidebar project to move it, or to All tasks to remove its proje
 
 Week tabs wrap onto additional rows when needed. With the pointer over the task list or its tabs, swipe left or right with two fingers on a trackpad, or scroll horizontally with a supported mouse, to move between the visible tabs. Each gesture moves one tab and stops at either end. Text editing, task dragging, and modal dialogs take priority over tab gestures.
 
+To reverse tab navigation, enable **Reverse horizontal swipe direction** in **Settings → Appearance & motion → List transitions**. The preference is saved and takes effect immediately for trackpad swipes and horizontal mouse scrolling.
+
 Hovering reveals the card's action buttons without changing its height or moving the tasks below it. Unfinished text remains available as you scroll away and return; quitting or closing the window saves valid input and brings you back to any field that still needs correction.
 
 ## Appearance and settings
