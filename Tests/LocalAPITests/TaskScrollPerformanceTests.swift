@@ -180,11 +180,14 @@ final class TaskScrollPerformanceTests: XCTestCase {
     private static func syntheticData() -> LedgerData {
         let today = Calendar.current.startOfDay(for: Date())
         let projects = (0..<3).map { Project(name: "Operations \($0 + 1)", colorHex: ["168C83", "3478F6", "9462C4"][$0]) }
-        let tasks = (0..<27).map { index in
-            WorkTask(projectID: projects[index % projects.count].id, title: "Review work item \(index + 1)",
+        let tasks: [WorkTask] = (0..<27).map { index in
+            let subtasks: [Subtask] = (0..<(index < 22 ? 2 : 1)).map { step in
+                Subtask(title: "Complete verification step \(step + 1)")
+            }
+            return WorkTask(projectID: projects[index % projects.count].id, title: "Review work item \(index + 1)",
                      details: String(repeating: "Review the deployment, verify its outcome, and document the next action.\n", count: 1 + index % 4),
                      notes: index.isMultiple(of: 3) ? "Confirm the owner and retain a rollback plan." : "",
-                     subtasks: (0..<(index < 22 ? 2 : 1)).map { Subtask(title: "Complete verification step \($0 + 1)") },
+                     subtasks: subtasks,
                      dueAt: index.isMultiple(of: 2) ? today.addingTimeInterval(Double(index + 1) * 86400) : nil,
                      reminderAt: index.isMultiple(of: 4) ? today.addingTimeInterval(18 * 3600) : nil,
                      repeatRule: index.isMultiple(of: 5) ? RepeatRule(every: 6, unit: .month) : nil,
