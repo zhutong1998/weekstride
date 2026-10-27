@@ -40,33 +40,43 @@ final class TaskSystemListTests: XCTestCase {
     }
 
     func testOpenTaskRevealsAnInitiallyUnrealizedTask() async throws {
-        try await withFixture { fixture in
-            let target = try XCTUnwrap(fixture.store.data.tasks.last)
-            let original = fixture.store.data
-            let bytes = try Data(contentsOf: fixture.dataURL)
-            XCTAssertNil(self.visibleProbes(in: fixture.host)[target.id])
+        for (columns, count) in [(TaskColumnMode.one, 1), (.two, 2), (.three, 3)] {
+            try await withFixture(columns: columns) { fixture in
+                let target = try XCTUnwrap(fixture.store.data.tasks.last)
+                if count > 1 {
+                    XCTAssertNotEqual((fixture.store.data.tasks.count - 1) % count, 0,
+                                      "The requested task must not be the first card in its multi-column row.")
+                }
+                let original = fixture.store.data
+                let bytes = try Data(contentsOf: fixture.dataURL)
+                let initialColumns = Set(self.visibleProbes(in: fixture.host).values.map {
+                    $0.convert($0.bounds, to: fixture.host).minX.rounded()
+                })
+                XCTAssertEqual(initialColumns.count, count, "The fixture must render the requested number of columns.")
+                XCTAssertNil(self.visibleProbes(in: fixture.host)[target.id])
 
-            NotificationCenter.default.post(name: .init("WorkLedger.openTask"), object: target.id.uuidString)
-            let revealed = await self.waitFor(fixture.host) {
-                self.visibleProbes(in: fixture.host)[target.id] != nil
+                NotificationCenter.default.post(name: .init("WorkLedger.openTask"), object: target.id.uuidString)
+                let revealed = await self.waitFor(fixture.host) {
+                    self.visibleProbes(in: fixture.host)[target.id] != nil
+                }
+                XCTAssertTrue(revealed, "Opening a task must reveal its containing system-list row (\(columns.rawValue)).")
+                let scroll = try XCTUnwrap(self.taskScrollView(in: fixture.host))
+                self.scroll(scroll, to: 0)
+                await self.settle(fixture.host)
+                XCTAssertNil(self.visibleProbes(in: fixture.host)[target.id])
+                self.scroll(scroll, to: .greatestFiniteMagnitude)
+                let remounted = await self.waitFor(fixture.host) { self.visibleProbes(in: fixture.host)[target.id] != nil }
+                XCTAssertTrue(remounted)
+                self.scroll(scroll, to: scroll.contentView.bounds.origin.y - scroll.contentView.bounds.height)
+                await self.settle(fixture.host)
+                await self.settle(fixture.host)
+                XCTAssertNil(self.visibleProbes(in: fixture.host)[target.id], "An old reveal must not recenter a manually scrolled list.")
+                let bottomGap = (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.maxY
+                XCTAssertGreaterThan(bottomGap, scroll.contentView.bounds.height / 2,
+                                     "The viewport must remain away from the old reveal at the bottom.")
+                XCTAssertEqual(fixture.store.data, original)
+                XCTAssertEqual(try Data(contentsOf: fixture.dataURL), bytes)
             }
-            XCTAssertTrue(revealed, "Opening a task must scroll the system list to its string row identifier.")
-            let scroll = try XCTUnwrap(self.taskScrollView(in: fixture.host))
-            self.scroll(scroll, to: 0)
-            await self.settle(fixture.host)
-            XCTAssertNil(self.visibleProbes(in: fixture.host)[target.id])
-            self.scroll(scroll, to: .greatestFiniteMagnitude)
-            let remounted = await self.waitFor(fixture.host) { self.visibleProbes(in: fixture.host)[target.id] != nil }
-            XCTAssertTrue(remounted)
-            self.scroll(scroll, to: scroll.contentView.bounds.origin.y - scroll.contentView.bounds.height)
-            await self.settle(fixture.host)
-            await self.settle(fixture.host)
-            XCTAssertNil(self.visibleProbes(in: fixture.host)[target.id], "An old reveal must not recenter a manually scrolled list.")
-            let bottomGap = (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.maxY
-            XCTAssertGreaterThan(bottomGap, scroll.contentView.bounds.height / 2,
-                                 "The viewport must remain away from the old reveal at the bottom.")
-            XCTAssertEqual(fixture.store.data, original)
-            XCTAssertEqual(try Data(contentsOf: fixture.dataURL), bytes)
         }
     }
 
@@ -109,25 +119,27 @@ final class TaskSystemListTests: XCTestCase {
     }
 
     func testScrollingDraftOffscreenDoesNotFinishItsEditingSession() async throws {
-        try await withFixture { fixture in
-            let original = fixture.store.data
-            let draftID = try await self.editAndScrollDraftOffscreen(fixture)
+        for columns in [TaskColumnMode.one, .three] {
+            try await withFixture(columns: columns) { fixture in
+                let original = fixture.store.data
+                let draftID = try await self.editAndScrollDraftOffscreen(fixture)
 
-            self.scroll(try XCTUnwrap(self.taskScrollView(in: fixture.host)), to: 0)
-            let returned = await self.waitFor(fixture.host) { self.visibleProbes(in: fixture.host)[draftID] != nil }
-            XCTAssertTrue(returned, "The same draft must remain available after scrolling back.")
-            let returnedTitle = self.draftTitleField(in: fixture.host)
-            XCTAssertNotNil(returnedTitle, "The draft title must return as an open editor.")
-            XCTAssertEqual(returnedTitle?.stringValue, "Retained scrolling draft")
-            let returnedStep = self.descendants(fixture.host).compactMap { $0 as? NSTextField }
-                .first { $0.isEditable && $0.placeholderString == L("步骤名称") }
-            XCTAssertNotNil(returnedStep, "The unfinished step editor must remain open.")
-            XCTAssertEqual(returnedStep?.stringValue, "Keep this unfinished step")
-            if let returnedTitle {
-                try await self.replaceText("Retained scrolling draft + continued", in: returnedTitle, fixture: fixture)
-                XCTAssertEqual(returnedTitle.currentEditor()?.string, "Retained scrolling draft + continued")
+                self.scroll(try XCTUnwrap(self.taskScrollView(in: fixture.host)), to: 0)
+                let returned = await self.waitFor(fixture.host) { self.visibleProbes(in: fixture.host)[draftID] != nil }
+                XCTAssertTrue(returned, "The same draft must remain available after scrolling back.")
+                let returnedTitle = self.draftTitleField(in: fixture.host)
+                XCTAssertNotNil(returnedTitle, "The draft title must return as an open editor.")
+                XCTAssertEqual(returnedTitle?.stringValue, "Retained scrolling draft")
+                let returnedStep = self.descendants(fixture.host).compactMap { $0 as? NSTextField }
+                    .first { $0.isEditable && $0.placeholderString == L("步骤名称") }
+                XCTAssertNotNil(returnedStep, "The unfinished step editor must remain open.")
+                XCTAssertEqual(returnedStep?.stringValue, "Keep this unfinished step")
+                if let returnedTitle {
+                    try await self.replaceText("Retained scrolling draft + continued", in: returnedTitle, fixture: fixture)
+                    XCTAssertEqual(returnedTitle.currentEditor()?.string, "Retained scrolling draft + continued")
+                }
+                XCTAssertTrue(fixture.store.data == original, "Scrolling back must leave the draft uncommitted.")
             }
-            XCTAssertTrue(fixture.store.data == original, "Scrolling back must leave the draft uncommitted.")
         }
     }
 
@@ -304,15 +316,15 @@ final class TaskSystemListTests: XCTestCase {
         let host: NSHostingView<AnyView>
     }
 
-    private func withFixture(taskCount: Int = 200, editingRegistry: TaskEditingRegistry? = nil,
+    private func withFixture(taskCount: Int = 200, columns: TaskColumnMode = .one, editingRegistry: TaskEditingRegistry? = nil,
                              _ test: (Fixture) async throws -> Void) async throws {
         let defaults = UserDefaults.standard
         let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
         let filter = try JSONEncoder().encode(TaskPlanFilter.all)
-        let display = try JSONEncoder().encode(TaskDisplaySetting(columns: .one, details: .expanded))
+        let display = try JSONEncoder().encode(TaskDisplaySetting(columns: columns, details: .expanded))
         defaults.setVolatileDomain(arguments.merging([
             "appLanguage": "en", "appTextSize": "standard", "appTimeFormat": "24",
-            "taskColumns": "one", "taskDetails": "expanded", "taskListEffect": "none",
+            "taskColumns": columns.rawValue, "taskDetails": "expanded", "taskListEffect": "none",
             "taskPlanFilter.all": filter, "taskDisplay.all": display,
             "apiEnabled": false, "remindersEnabled": false
         ]) { _, value in value }, forName: UserDefaults.argumentDomain)

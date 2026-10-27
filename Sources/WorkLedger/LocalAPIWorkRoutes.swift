@@ -3,16 +3,17 @@ import WorkLedgerCore
 
 @MainActor
 enum LocalAPIWorkRoutes {
-    private static let taskFields: Set<String> = ["title", "details", "notes", "projectID", "plannedAt", "planGranularity", "dueAt", "reminderAt", "repeatRule"]
+    private static let taskFields: Set<String> = ["title", "details", "notes", "projectID", "tagIDs", "isStarred", "plannedAt", "planGranularity", "dueAt", "reminderAt", "repeatRule"]
 
     static func respond(to request: LocalAPIRequest, store: WorkStore, firstWeekday: Int) throws -> LocalAPIResponse? {
         guard let components = URLComponents(string: request.head.target), components.scheme == nil, components.host == nil else {
             throw invalid("Invalid request target.")
         }
         let path = components.path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard path.count >= 3, path[0].isEmpty, path[1] == "v1", ["projects", "tasks"].contains(path[2]) else { return nil }
+        guard path.count >= 3, path[0].isEmpty, path[1] == "v1", ["projects", "tags", "tasks"].contains(path[2]) else { return nil }
         if request.head.method == "GET", !request.body.isEmpty { throw invalid("GET requests do not accept a body.") }
         let query = try queryValues(components.queryItems ?? [])
+        if path[2] == "tags" { return try tags(request, path: path, query: query, store: store) }
         if path[2] == "projects" {
             if path.count == 3 { return try projects(request, query: query, store: store) }
             if path.count == 4 {
@@ -150,8 +151,43 @@ enum LocalAPIWorkRoutes {
         }
     }
 
+    private static func tags(_ request: LocalAPIRequest, path: [String], query: [String: String], store: WorkStore) throws -> LocalAPIResponse? {
+        guard path.count == 3 || path.count == 4 else { return nil }
+        guard query.isEmpty else { throw invalid("Tag routes do not accept query parameters.") }
+        if path.count == 3 {
+            switch request.head.method {
+            case "GET": return try .json(store.data.tags)
+            case "POST":
+                let json = try LocalAPIJSON(request, allowed: ["name", "colorHex"], required: ["name"])
+                let name = try json.string("name", allowEmpty: false)!
+                let color = try json.string("colorHex", allowEmpty: false) ?? "9462C4"
+                try validateProject(name: name, color: color)
+                return try .json(store.addTag(name: name, colorHex: color), status: 201)
+            default: throw methodNotAllowed()
+            }
+        }
+        let id = try uuid(path[3], field: "tag ID")
+        guard let tag = store.data.tags.first(where: { $0.id == id }) else { throw missing("Tag not found.") }
+        switch request.head.method {
+        case "GET": return try .json(tag)
+        case "PATCH":
+            let json = try LocalAPIJSON(request, allowed: ["name", "colorHex"])
+            guard !json.raw.isEmpty else { throw invalid("Provide at least one tag field.") }
+            let name = try json.string("name", allowEmpty: false)
+            let color = try json.string("colorHex", allowEmpty: false)
+            try validateProject(name: name, color: color)
+            return try .json(store.updateTag(id: id, name: name, colorHex: color))
+        case "DELETE":
+            _ = try LocalAPIJSON(request, allowed: [], allowEmpty: true)
+            try LocalAPIJSON.flushEdits()
+            let taskIDs = store.data.tasks.filter { $0.tagIDs.contains(id) }.map(\.id)
+            return try .json(TagDeletion(tag: store.deleteTag(id: id), untaggedTaskIDs: taskIDs))
+        default: throw methodNotAllowed()
+        }
+    }
+
     private static func tasks(query: [String: String], store: WorkStore, firstWeekday: Int) throws -> [WorkTask] {
-        let allowed: Set<String> = ["status", "projectId", "search", "plan", "week", "overduePlan", "urgent", "dueFrom", "dueBefore", "reminderFrom", "reminderBefore", "completedFrom", "completedBefore"]
+        let allowed: Set<String> = ["status", "projectId", "tagId", "starred", "search", "plan", "week", "overduePlan", "urgent", "dueFrom", "dueBefore", "reminderFrom", "reminderBefore", "completedFrom", "completedBefore"]
         guard Set(query.keys).isSubset(of: allowed) else { throw invalid("Unknown task query parameter.") }
         var result = store.data.tasks
         if let status = query["status"] {
@@ -162,9 +198,21 @@ enum LocalAPIWorkRoutes {
             let id = project == "none" ? nil : try uuid(project, field: "projectId")
             result = result.filter { $0.projectID == id }
         }
+        if let value = query["tagId"] {
+            let id = try uuid(value, field: "tagId")
+            guard store.data.tags.contains(where: { $0.id == id }) else { throw missing("Tag not found.") }
+            result = result.filter { $0.tagIDs.contains(id) }
+        }
+        if let value = query["starred"] {
+            guard ["true", "false"].contains(value) else { throw invalid("starred must be true or false.") }
+            result = result.filter { $0.isStarred == (value == "true") }
+        }
         if let search = query["search"], !search.isEmpty {
+            let tagNames = Dictionary(uniqueKeysWithValues: store.data.tags.map { ($0.id, $0.name) })
             result = result.filter { task in
-                ([task.title, task.details, task.notes] + task.subtasks.map(\.title) + task.attachments.map(\.name)).contains { $0.localizedCaseInsensitiveContains(search) }
+                let text = [task.title, task.details, task.notes] + task.subtasks.map(\.title) + task.attachments.map(\.name)
+                    + task.tagIDs.compactMap { tagNames[$0] }
+                return text.contains { $0.localizedCaseInsensitiveContains(search) }
             }
         }
         for key in ["overduePlan", "urgent"] {
@@ -212,6 +260,15 @@ enum LocalAPIWorkRoutes {
         if let title = try json.string("title", allowEmpty: false) { candidate.title = title }
         if let details = try json.string("details") { candidate.details = details }
         if let notes = try json.string("notes") { candidate.notes = notes }
+        if json.contains("tagIDs") {
+            guard let ids = try json.decode("tagIDs", as: [UUID].self), Set(ids).count == ids.count else {
+                throw invalid("tagIDs must be an array of unique tag UUIDs; use [] to remove all tags.")
+            }
+            let known = Set(store.data.tags.map(\.id))
+            guard ids.allSatisfy(known.contains) else { throw missing("Target tag not found.") }
+            candidate.tagIDs = ids
+        }
+        if let starred = try json.bool("isStarred") { candidate.isStarred = starred }
         if json.contains("projectID") {
             candidate.projectID = try json.uuid("projectID")
             if let id = candidate.projectID {
@@ -371,7 +428,7 @@ enum LocalAPIWorkRoutes {
         guard let snapshot = value as? [String: Any], Set(snapshot.keys) == ["task", "predecessorIDs"], let task = snapshot["task"] as? [String: Any] else {
             throw invalid("snapshot must contain a task and predecessorIDs from a task deletion response.")
         }
-        let fields: Set<String> = ["id", "projectID", "title", "details", "notes", "subtasks", "attachments", "dueAt", "reminderAt", "repeatRule", "completedAt", "completionSource", "createdAt", "updatedAt", "seriesID", "nextTaskID", "completionSubtaskSnapshot", "scheduleAnchor", "plannedAt", "planGranularity"]
+        let fields: Set<String> = ["id", "projectID", "tagIDs", "isStarred", "title", "details", "notes", "subtasks", "attachments", "dueAt", "reminderAt", "repeatRule", "completedAt", "completionSource", "createdAt", "updatedAt", "seriesID", "nextTaskID", "completionSubtaskSnapshot", "scheduleAnchor", "plannedAt", "planGranularity"]
         guard Set(task.keys).isSubset(of: fields) else { throw invalid("Unknown task snapshot fields.") }
         try validateRepeatFields(task["repeatRule"])
         for name in ["subtasks", "completionSubtaskSnapshot"] {
@@ -415,5 +472,10 @@ enum LocalAPIWorkRoutes {
     private struct ProjectDeletion: Encodable {
         let project: Project
         let unassignedTaskIDs: [UUID]
+    }
+
+    private struct TagDeletion: Encodable {
+        let tag: TaskTag
+        let untaggedTaskIDs: [UUID]
     }
 }

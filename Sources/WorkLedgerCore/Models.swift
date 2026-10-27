@@ -11,6 +11,16 @@ public struct Project: Codable, Identifiable, Equatable {
     }
 }
 
+public struct TaskTag: Codable, Identifiable, Equatable {
+    public var id: UUID
+    public var name: String
+    public var colorHex: String
+
+    public init(id: UUID = UUID(), name: String, colorHex: String = "9462C4") {
+        self.id = id; self.name = name; self.colorHex = colorHex
+    }
+}
+
 public struct Subtask: Codable, Identifiable, Equatable {
     public var id: UUID
     public var title: String
@@ -193,8 +203,10 @@ public struct WorkTask: Codable, Identifiable, Equatable {
     public var scheduleAnchor: ScheduleAnchor?
     public var plannedAt: Date?
     public var planGranularity: TaskPlanGranularity?
+    public var tagIDs: [UUID]
+    public var isStarred: Bool
 
-    public init(id: UUID = UUID(), projectID: UUID? = nil, title: String, details: String = "", notes: String = "", subtasks: [Subtask] = [], attachments: [Attachment] = [], dueAt: Date? = nil, reminderAt: Date? = nil, repeatRule: RepeatRule? = nil, completedAt: Date? = nil, completionSource: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), seriesID: UUID? = nil, nextTaskID: UUID? = nil, completionSubtaskSnapshot: [Subtask]? = nil, scheduleAnchor: ScheduleAnchor? = nil, plannedAt: Date? = nil, planGranularity: TaskPlanGranularity? = nil) {
+    public init(id: UUID = UUID(), projectID: UUID? = nil, title: String, details: String = "", notes: String = "", subtasks: [Subtask] = [], attachments: [Attachment] = [], dueAt: Date? = nil, reminderAt: Date? = nil, repeatRule: RepeatRule? = nil, completedAt: Date? = nil, completionSource: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), seriesID: UUID? = nil, nextTaskID: UUID? = nil, completionSubtaskSnapshot: [Subtask]? = nil, scheduleAnchor: ScheduleAnchor? = nil, plannedAt: Date? = nil, planGranularity: TaskPlanGranularity? = nil, tagIDs: [UUID] = [], isStarred: Bool = false) {
         self.id = id; self.projectID = projectID; self.title = title; self.details = details; self.notes = notes
         self.subtasks = subtasks; self.attachments = attachments; self.dueAt = dueAt; self.reminderAt = reminderAt
         self.repeatRule = repeatRule; self.completedAt = completedAt; self.completionSource = completionSource
@@ -202,6 +214,39 @@ public struct WorkTask: Codable, Identifiable, Equatable {
         self.completionSubtaskSnapshot = completionSubtaskSnapshot
         self.scheduleAnchor = scheduleAnchor
         self.plannedAt = plannedAt; self.planGranularity = planGranularity
+        self.tagIDs = tagIDs; self.isStarred = isStarred
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, projectID, title, details, notes, subtasks, attachments, dueAt, reminderAt, repeatRule
+        case completedAt, completionSource, createdAt, updatedAt, seriesID, nextTaskID
+        case completionSubtaskSnapshot, scheduleAnchor, plannedAt, planGranularity, tagIDs, isStarred
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        projectID = try values.decodeIfPresent(UUID.self, forKey: .projectID)
+        title = try values.decode(String.self, forKey: .title)
+        details = try values.decode(String.self, forKey: .details)
+        notes = try values.decode(String.self, forKey: .notes)
+        subtasks = try values.decode([Subtask].self, forKey: .subtasks)
+        attachments = try values.decode([Attachment].self, forKey: .attachments)
+        dueAt = try values.decodeIfPresent(Date.self, forKey: .dueAt)
+        reminderAt = try values.decodeIfPresent(Date.self, forKey: .reminderAt)
+        repeatRule = try values.decodeIfPresent(RepeatRule.self, forKey: .repeatRule)
+        completedAt = try values.decodeIfPresent(Date.self, forKey: .completedAt)
+        completionSource = try values.decodeIfPresent(String.self, forKey: .completionSource)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        seriesID = try values.decodeIfPresent(UUID.self, forKey: .seriesID)
+        nextTaskID = try values.decodeIfPresent(UUID.self, forKey: .nextTaskID)
+        completionSubtaskSnapshot = try values.decodeIfPresent([Subtask].self, forKey: .completionSubtaskSnapshot)
+        scheduleAnchor = try values.decodeIfPresent(ScheduleAnchor.self, forKey: .scheduleAnchor)
+        plannedAt = try values.decodeIfPresent(Date.self, forKey: .plannedAt)
+        planGranularity = try values.decodeIfPresent(TaskPlanGranularity.self, forKey: .planGranularity)
+        tagIDs = try values.contains(.tagIDs) ? values.decode([UUID].self, forKey: .tagIDs) : []
+        isStarred = try values.contains(.isStarred) ? values.decode(Bool.self, forKey: .isStarred) : false
     }
 
     public func matchesCompletedHistory(in interval: DateInterval? = nil) -> Bool {
@@ -248,9 +293,21 @@ public struct LedgerData: Codable, Equatable {
     public var schemaVersion: Int
     public var projects: [Project]
     public var tasks: [WorkTask]
+    public var tags: [TaskTag]
 
-    public init(schemaVersion: Int = 1, projects: [Project] = [], tasks: [WorkTask] = []) {
+    public init(schemaVersion: Int = 1, projects: [Project] = [], tasks: [WorkTask] = [], tags: [TaskTag] = []) {
         self.schemaVersion = schemaVersion; self.projects = projects; self.tasks = tasks
+        self.tags = tags
+    }
+
+    private enum CodingKeys: String, CodingKey { case schemaVersion, projects, tasks, tags }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        projects = try values.decode([Project].self, forKey: .projects)
+        tasks = try values.decode([WorkTask].self, forKey: .tasks)
+        tags = try values.contains(.tags) ? values.decode([TaskTag].self, forKey: .tags) : []
     }
 }
 

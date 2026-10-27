@@ -9,12 +9,35 @@ struct TaskFlowLayout: Layout {
         let size: CGSize
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrangement(subviews: subviews, width: proposal.width).size
+    struct Cache {
+        var proposalWidth: CGFloat?
+        var spacing: CGFloat = 0
+        var rowSpacing: CGFloat = 0
+        var arrangement: Arrangement?
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let layout = arrangement(subviews: subviews, width: bounds.width)
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let layout = arrangement(subviews: subviews, width: proposal.width)
+        cache = Cache(proposalWidth: Self.widthLimit(proposal.width), spacing: spacing,
+                      rowSpacing: rowSpacing, arrangement: layout)
+        return layout.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let layout: Arrangement
+        if let measured = cache.arrangement, measured.frames.count == subviews.count,
+           cache.spacing == spacing, cache.rowSpacing == rowSpacing,
+           cache.proposalWidth == bounds.width || measured.size.width == bounds.width {
+            layout = measured
+        } else {
+            layout = arrangement(subviews: subviews, width: bounds.width)
+        }
+        // Reuse only the immediately preceding measurement, never sizes from an earlier content update.
+        cache = Cache()
         for (subview, frame) in zip(subviews, layout.frames) {
             subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
                           anchor: .topLeading, proposal: ProposedViewSize(frame.size))

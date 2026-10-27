@@ -44,7 +44,7 @@ enum LocalAPIHelp {
           tasks, settings, or files, and cannot change them. All data and control endpoints require your Bearer token.</p>
         </header>
         <nav aria-label="API guide sections">
-          <a href="#connect">Connect</a><a href="#quick-start">Quick start</a><a href="#work">Tasks and projects</a>
+          <a href="#connect">Connect</a><a href="#quick-start">Quick start</a><a href="#work">Tasks, projects, and tags</a>
           <a href="#files">Files and backups</a><a href="#settings">Settings</a><a href="#routes">All routes</a><a href="#rules">Rules and errors</a>
         </nav>
 
@@ -77,7 +77,7 @@ enum LocalAPIHelp {
         <section id="quick-start">
           <h2>2. Read, create, and complete a task</h2>
           <p>These examples use the helper above. Replace <code>TASK_ID</code>, <code>PROJECT_ID</code>, <code>STEP_ID</code>,
-          <code>ATTACHMENT_ID</code>, and <code>BACKUP_ID</code> with UUIDs returned by the API.</p>
+          <code>TAG_ID</code>, <code>ATTACHMENT_ID</code>, and <code>BACKUP_ID</code> with UUIDs returned by the API.</p>
           <pre><code># Read this week's open tasks.
         api '/v1/tasks?status=open&amp;plan=thisWeek'
 
@@ -100,7 +100,7 @@ enum LocalAPIHelp {
         </section>
 
         <section id="work">
-          <h2>3. Tasks, projects, dates, and steps</h2>
+          <h2>3. Tasks, projects, tags, dates, and steps</h2>
           <table>
             <thead><tr><th>Action</th><th>Body or query</th></tr></thead>
             <tbody>
@@ -108,10 +108,17 @@ enum LocalAPIHelp {
               List with <code>GET /v1/projects?status=active</code>; <code>status</code> also accepts <code>all</code> or <code>archived</code>.</td></tr>
               <tr><td>Edit or archive a project</td><td><code>PATCH /v1/projects/PROJECT_ID</code>: <code>name</code>, six-digit <code>colorHex</code>,
               or boolean <code>isArchived</code>. Deleting a project keeps its tasks and removes their project assignment.</td></tr>
+              <tr><td>Create or edit a tag</td><td><code>POST /v1/tags</code> with <code>{"name":"Follow up","colorHex":"9462C4"}</code>.
+              List with <code>GET /v1/tags</code>; read, <code>PATCH</code>, or <code>DELETE /v1/tags/TAG_ID</code>.
+              Tags are independent of projects. Deleting a tag removes its assignments and keeps tasks, other tags, and stars.</td></tr>
               <tr><td>Create or edit a task</td><td><code>POST /v1/tasks</code> requires <code>title</code>. <code>PATCH /v1/tasks/TASK_ID</code>
-              accepts <code>title</code>, <code>details</code>, <code>notes</code>, <code>projectID</code>, <code>plannedAt</code>,
+              accepts <code>title</code>, <code>details</code>, <code>notes</code>, <code>projectID</code>, <code>tagIDs</code>, <code>isStarred</code>, <code>plannedAt</code>,
               <code>planGranularity</code>, <code>dueAt</code>, <code>reminderAt</code>, and <code>repeatRule</code>.
               Use <code>projectID:null</code> to unassign. Names and titles cannot be blank. Use dedicated endpoints for steps, files, and completion.</td></tr>
+              <tr><td>Assign tags or star a task</td><td><code>PATCH /v1/tasks/TASK_ID</code> with <code>{"tagIDs":["TAG_ID"],"isStarred":true}</code>.
+              A task can have one project and multiple tags. <code>tagIDs</code> replaces the entire list with unique existing tag UUIDs;
+              use <code>[]</code> to clear tags and <code>isStarred:false</code> to remove the star. Neither accepts <code>null</code>.
+              Recurring successors inherit both fields.</td></tr>
               <tr><td>Plan a task</td><td><code>POST /v1/tasks/TASK_ID/plan</code>: <code>{"plan":"nextWeek"}</code>.
               Choices: <code>thisWeek</code>, <code>nextWeek</code>, <code>weekAfterNext</code>, <code>unscheduled</code>;
               <code>week</code> and <code>day</code> require an ISO <code>date</code> field. Weeks follow Settings → Week starts on.
@@ -135,13 +142,14 @@ enum LocalAPIHelp {
           </table>
           <h3>Task filters</h3>
           <p><code>GET /v1/tasks</code> returns open and completed tasks unless filtered. Filters combine with AND:
-          <code>status=all|open|completed</code>, <code>projectId=PROJECT_ID|none</code>, <code>search=TEXT</code>,
+          <code>status=all|open|completed</code>, <code>projectId=PROJECT_ID|none</code>, <code>tagId=TAG_ID</code>, <code>starred=true|false</code>, <code>search=TEXT</code>,
           <code>plan=thisWeek|nextWeek|week|unscheduled</code> (with ISO <code>week</code> only for <code>plan=week</code>),
           <code>overduePlan=true|false</code>, and <code>urgent=true|false</code>.
           Date intervals use <code>dueFrom/dueBefore</code>, <code>reminderFrom/reminderBefore</code>,
           or <code>completedFrom/completedBefore</code>: inclusive start, exclusive end.</p>
           <p>This week's open tasks include older unfinished plans. Completed tasks are grouped by actual completion week.
-          Query field <code>projectId</code> has a lowercase <code>d</code>; JSON field <code>projectID</code> has uppercase <code>ID</code>.
+          Search includes assigned tag names. Query fields <code>projectId</code> and <code>tagId</code> have a lowercase <code>d</code>;
+          JSON fields are <code>projectID</code> and <code>tagIDs</code>.
           Use curl <code>--get --data-urlencode</code> for dates containing a <code>+</code> time-zone offset.</p>
         </section>
 
@@ -158,7 +166,7 @@ enum LocalAPIHelp {
         # Restore it only when you intend to replace all current work data.
         api '/v1/backups/BACKUP_ID/restore' --request POST --header 'Content-Type: application/json' \
           --data '{"confirm":"replace-current-data"}'</code></pre>
-          <p class="notice"><strong>Restoration replaces current projects, tasks, and completion history.</strong>
+          <p class="notice"><strong>Restoration replaces current projects, tags, tasks, and completion history.</strong>
           A safety copy is created first. API tokens and application preferences are preserved.</p>
           <p><code>GET /v1/backups</code> lists API-managed snapshots only. <code>DELETE /v1/backups/BACKUP_ID</code> deletes that snapshot.
           A portable export contains <code>format:"weekstride-backup-v1"</code>, native ledger <code>data</code>, and <code>attachments</code>
@@ -182,9 +190,10 @@ enum LocalAPIHelp {
           </ul>
           <p><code>GET /v1/settings/status</code> reports service availability and permissions. Notification permission and test notifications
           require the app UI; login registration may require macOS approval. Global display changes preserve project overrides.</p>
-          <p><code>GET/PATCH /v1/projects/PROJECT_ID/view</code> supports <code>columns</code>, <code>details</code>,
+          <p><code>GET/PATCH /v1/projects/PROJECT_ID/view</code> and <code>GET/PATCH /v1/tags/TAG_ID/view</code> support <code>columns</code>, <code>details</code>,
           <code>planFilter:all|thisWeek|nextWeek|week|unscheduled</code>, and ISO <code>week</code> with <code>planFilter:"week"</code>.
-          <code>resetDisplay:true</code> clears the display override and cannot be combined with <code>columns</code> or <code>details</code>.</p>
+          <code>resetDisplay:true</code> clears the display override and cannot be combined with <code>columns</code> or <code>details</code>.
+          Each project and tag keeps independent view preferences.</p>
           <p><code>POST /v1/settings/api/disable</code> or <code>POST /v1/settings/api/rotate-token</code> accepts no body or <code>{}</code>
           and returns <code>202</code> before acting. Disabling stops the server. After rotation, copy the new token from Settings;
           the old token stops working. Enabling the API again always requires the app UI.</p>

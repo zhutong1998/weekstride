@@ -53,7 +53,8 @@ final class LocalAPIHelpTests: XCTestCase {
         let html = try XCTUnwrap(String(data: help.0, encoding: .utf8))
         for text in ["WeekStride Local API", "Settings → Local API", "Authorization: Bearer YOUR_TOKEN", "curl", "--request POST",
                      "/v1/tasks/TASK_ID/complete", "repeatRule", "plannedAt", "dueAt", "reminderAt", "Content-Type: application/json",
-                     "replace-current-data", "401", "403", "ISO 8601", "numeric dates", "runInMenuBar"] {
+                     "replace-current-data", "401", "403", "ISO 8601", "numeric dates", "runInMenuBar",
+                     "/v1/tags", "tagIDs", "isStarred", "starred=true|false"] {
             XCTAssertTrue(html.contains(text), "Root help is missing \(text)")
         }
         for route in LocalAPICapabilities().routes { XCTAssertTrue(html.contains(route), "Root help must use the discovery route list: \(route)") }

@@ -4,11 +4,12 @@
 
 WeekStride is a native macOS weekly planner for individual project and operations work: the tasks you need to move forward this week, the dates you need to watch, and the recurring jobs you need to remember next time.
 
-The design has three primary pillars:
+The design has four primary pillars:
 
 - **Focus on this week.** Bring this week's commitments and unfinished earlier plans into one working view, with projects and future weeks available when you need them.
 - **Local API for AI tools and scripts.** Let tools you choose query and manage the same work data through an API that you enable manually and authenticate with a token.
 - **Read the full task context directly in the list.** In full-detail mode, see instructions, steps, notes, attachments, and dates on the task card, and edit in place without opening a separate detail page for each task.
+- **Organize work across projects.** Give a task multiple tags while retaining its project and weekly plan. Star important tasks to keep them first in the list, or review them together in Starred tasks.
 
 Your work stays on your Mac. No account or cloud service is required, and automation is available through an optional local API that you enable and control.
 
@@ -29,7 +30,7 @@ WeekStride suits people who handle many small pieces of work across projects and
 
 It is built around one person's work on one Mac. Shared assignment, team permissions, mobile clients, and cloud sync are outside the current feature set.
 
-## Three primary pillars
+## Core workflow
 
 ### 1. Focus on this week
 
@@ -102,7 +103,9 @@ The next due date and reminder are calculated from the recurrence rule. Check th
 5. Add a due date, reminder, or recurrence when needed. Date and time shortcuts stay in the picker until you confirm.
 6. Complete the work and review its history. Supported operations can be undone from the feedback bar or with `Command-Z`.
 
-Drag a task to a sidebar project to move it, or to All tasks to remove its project assignment. Drop it onto a week tab to reschedule it. Moving a task or changing its plan preserves its text, other dates, steps, and attachments.
+Drag a task to a sidebar project to move it, or to All tasks to remove its project assignment. Drop it onto a sidebar tag to add that tag while preserving its project and other tags. Tags can also be added or removed on the task card; deleting a tag keeps its tasks. Click the star on a task to prioritize it. Starred tasks appear first within the pending and completed sections, and the Starred tasks sidebar view shows starred work across weeks. Starred tasks are selected by clicking, without a drag target.
+
+Drop a task onto a week tab to reschedule it. Moving a task or changing its plan preserves its text, other dates, steps, and attachments. Recurring successors inherit their tags and starred flag.
 
 Week tabs wrap onto additional rows when needed. With the pointer over the task list or its tabs, swipe left or right with two fingers on a trackpad, or scroll horizontally with a supported mouse, to move between the visible tabs. Each gesture moves one tab and stops at either end. Text editing, task dragging, and modal dialogs take priority over tab gestures.
 

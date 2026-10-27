@@ -2,17 +2,19 @@ import Foundation
 import WorkLedgerCore
 
 enum SidebarItem: Hashable {
-    case all, thisWeek, upcoming, overdue, reminders, completed, project(UUID)
+    case all, thisWeek, starred, upcoming, overdue, reminders, completed, project(UUID), tag(UUID)
 
     var planFilterPreferenceKey: String {
         switch self {
         case .all: return "all"
         case .thisWeek: return "thisWeek"
+        case .starred: return "starred"
         case .upcoming: return "upcoming"
         case .overdue: return "overdue"
         case .reminders: return "reminders"
         case .completed: return "completed"
         case .project(let id): return "project.\(id.uuidString)"
+        case .tag(let id): return "tag.\(id.uuidString)"
         }
     }
 }
@@ -85,10 +87,10 @@ enum TaskListSlide: Equatable {
         }
     }
 
-    static func between(_ before: TaskViewContext, _ after: TaskViewContext, projectIDs: [UUID]) -> Self? {
+    static func between(_ before: TaskViewContext, _ after: TaskViewContext, projectIDs: [UUID], tagIDs: [UUID] = []) -> Self? {
         if before.scope != after.scope {
-            let scopes: [SidebarItem] = [.all, .thisWeek, .upcoming, .overdue, .reminders, .completed]
-                + projectIDs.map(SidebarItem.project)
+            let scopes: [SidebarItem] = [.all, .thisWeek, .starred, .upcoming, .overdue, .reminders, .completed]
+                + projectIDs.map(SidebarItem.project) + tagIDs.map(SidebarItem.tag)
             return .vertical(forward: (scopes.firstIndex(of: after.scope) ?? scopes.count)
                              > (scopes.firstIndex(of: before.scope) ?? -1))
         }
@@ -129,6 +131,12 @@ enum TaskNavigation {
         switch action {
         case .completed, .restored: return nil
         case .open:
+            if case .tag(let id) = current.scope, task.tagIDs.contains(id) {
+                return TaskViewContext(scope: current.scope, filter: targetFilter, search: "", history: current.history)
+            }
+            if current.scope == .starred, task.isStarred {
+                return TaskViewContext(scope: .starred, filter: .all, search: "", history: current.history)
+            }
             var destination = TaskViewContext(scope: task.completedAt == nil ? (task.projectID.map(SidebarItem.project) ?? .all) : .completed,
                                               filter: task.completedAt == nil ? targetFilter : .all, search: "", history: current.history)
             if let completedAt = task.completedAt {
@@ -145,14 +153,18 @@ enum TaskNavigation {
         case .planned:
             guard task.completedAt == nil else { return nil }
             switch current.scope {
-            case .all, .project:
+            case .all, .project, .tag:
                 guard !current.filter.includes(task, relativeTo: today, firstWeekday: firstWeekday, calendar: calendar) else { return nil }
                 return TaskViewContext(scope: current.scope, filter: targetFilter, search: "", history: current.history)
-            case .thisWeek, .upcoming, .overdue, .reminders, .completed: return nil
+            case .thisWeek, .starred, .upcoming, .overdue, .reminders, .completed: return nil
             }
         case .created:
-            return TaskViewContext(scope: task.projectID.map(SidebarItem.project) ?? .all,
-                                   filter: current.filter.includes(task, relativeTo: today, firstWeekday: firstWeekday, calendar: calendar) ? current.filter : targetFilter,
+            let scope: SidebarItem
+            if case .tag(let id) = current.scope, task.tagIDs.contains(id) { scope = current.scope }
+            else if current.scope == .starred, task.isStarred { scope = .starred }
+            else { scope = task.projectID.map(SidebarItem.project) ?? .all }
+            let filter: TaskPlanFilter = scope == .starred ? .all : (current.filter.includes(task, relativeTo: today, firstWeekday: firstWeekday, calendar: calendar) ? current.filter : targetFilter)
+            return TaskViewContext(scope: scope, filter: filter,
                                    search: "", history: current.history)
         }
     }
@@ -172,6 +184,7 @@ enum TaskOperationEvent {
 enum TaskOperationUndo {
     case plan(before: WorkTask, after: WorkTask)
     case project(before: WorkTask, after: WorkTask)
+    case tags(before: WorkTask, after: WorkTask)
     case completion(WorkTask)
     case subtaskCompletion(taskID: UUID, subtaskID: UUID, before: Date?, after: Date?)
     case removedSubtask(taskID: UUID, child: Subtask, index: Int, parentCompletedAt: Date?)
@@ -192,6 +205,13 @@ enum TaskOperationUndo {
                 throw LedgerError.conflict(L("任务所属项目已经再次更改，无法撤销这次操作。"))
             }
             try store.moveTask(id: after.id, toProject: before.projectID)
+            return store.data.tasks.first { $0.id == after.id }!
+        case .tags(let before, let after):
+            guard let current = store.data.tasks.first(where: { $0.id == after.id }), current.completedAt == after.completedAt,
+                  current.tagIDs == after.tagIDs else {
+                throw LedgerError.conflict(L("任务标签已经再次更改，无法撤销这次操作。"))
+            }
+            try store.updateTask(id: after.id) { $0.tagIDs = before.tagIDs }
             return store.data.tasks.first { $0.id == after.id }!
         case .completion(let completed):
             guard store.data.tasks.first(where: { $0.id == completed.id })?.completedAt == completed.completedAt else {

@@ -24,7 +24,15 @@ private struct TaskPlanningDayKey: EnvironmentKey {
     static var defaultValue: Date { Calendar.current.startOfDay(for: Date()) }
 }
 
+private struct TaskCardFillsGridRowKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
+    var taskCardFillsGridRow: Bool {
+        get { self[TaskCardFillsGridRowKey.self] }
+        set { self[TaskCardFillsGridRowKey.self] = newValue }
+    }
     var taskHoverEnabled: Bool {
         get { self[TaskHoverEnabledKey.self] }
         set { self[TaskHoverEnabledKey.self] = newValue }
@@ -411,9 +419,11 @@ struct InlineEditableText: View {
                     }.padding(.horizontal, 7).padding(.vertical, 5)
                         .contentShape(RoundedRectangle(cornerRadius: 6))
                         .background {
-                            RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(taskHoverEnabled && hovering && input.showsHoverBackground ? 0.045 : 0))
-                                .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
+                            if taskHoverEnabled && hovering && input.showsHoverBackground {
+                                RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.045)).transition(.opacity)
+                            }
                         }
+                        .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
                 }.buttonStyle(.plain).help(input.help).accessibilityLabel(input.help)
             }
         }
@@ -760,9 +770,9 @@ private struct TaskSubtaskRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .background {
-            RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(active ? 0.045 : 0))
-                .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: active)
+            if active { RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.045)).transition(.opacity) }
         }
+        .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: active)
         .onHover { hovering = taskHoverEnabled && $0 }
         .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovering = false } }
         .contextMenu {
@@ -779,25 +789,35 @@ private struct FooterActionButtonStyle: ButtonStyle {
     @Environment(\.taskHoverEnabled) private var taskHoverEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    let visible: Bool
     var prominent = false
 
     func makeBody(configuration: Configuration) -> some View {
-        ViewThatFits(in: .horizontal) {
-            configuration.label.fixedSize(horizontal: true, vertical: false)
-            configuration.label.labelStyle(.iconOnly).fixedSize(horizontal: true, vertical: false)
+        Group {
+            if visible {
+                ViewThatFits(in: .horizontal) {
+                    configuration.label.fixedSize(horizontal: true, vertical: false)
+                    configuration.label.labelStyle(.iconOnly).fixedSize(horizontal: true, vertical: false)
+                }
+                .appFont(.system(size: 11, weight: .medium))
+                .foregroundStyle(configuration.role == .destructive ? Color.red : (prominent ? Color.accentColor : .primary))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .frame(minWidth: 28, minHeight: 24)
+                .contentShape(Capsule())
+                .background((prominent ? Color.accentColor : Color.primary).opacity(prominent ? 0.1 : (taskHoverEnabled && hovering ? 0.06 : 0)), in: Capsule())
+                .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
+                .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
+                .scaleEffect(reduceMotion || !isEnabled || !configuration.isPressed ? 1 : 0.97)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: configuration.isPressed)
+                .onHover { hovering = taskHoverEnabled && $0 }
+                .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovering = false } }
+            } else {
+                configuration.label.labelStyle(.iconOnly)
+                    .appFont(.system(size: 11, weight: .medium))
+                    .frame(width: 28, height: 24)
+            }
         }
-            .appFont(.system(size: 11, weight: .medium))
-            .foregroundStyle(configuration.role == .destructive ? Color.red : (prominent ? Color.accentColor : .primary))
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .frame(minWidth: 28, minHeight: 24)
-            .contentShape(Capsule())
-            .background((prominent ? Color.accentColor : Color.primary).opacity(prominent ? 0.1 : (taskHoverEnabled && hovering ? 0.06 : 0)), in: Capsule())
-            .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovering)
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
-            .scaleEffect(reduceMotion || !isEnabled || !configuration.isPressed ? 1 : 0.97)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: configuration.isPressed)
-            .onHover { hovering = taskHoverEnabled && $0 }
-            .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovering = false } }
+        .onChange(of: visible) { _, visible in if !visible { hovering = false } }
     }
 }
 
@@ -982,11 +1002,16 @@ struct TaskCard: View, Equatable {
     @Environment(\.taskDetailsMode) private var detailsMode
     @Environment(\.taskListScrollState) private var scrollActivity
     @Environment(\.taskListPreservesEditing) private var preservesEditingOnScroll
+    @Environment(\.taskCardFillsGridRow) private var fillsGridRow
     @Environment(\.appTextScale) private var textScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityEnabled) private var accessibilityEnabled
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControlEnabled
     @AppStorage("weekStart") private var weekStart = 5
     let task: WorkTask
     let project: Project?
+    private let tags: [TaskTag]
     let isHistory: Bool
     let isNavigationTarget: Bool
     let initiallyExpanded: Bool
@@ -1006,13 +1031,15 @@ struct TaskCard: View, Equatable {
     @State private var dateCloseEvent: NSEvent?
     @State private var selectedDate = Date()
     @State private var confirmDelete = false
+    @State private var tagPickerAnchor: TagPickerAnchor?
     @FocusState private var cardFocused: Bool
     @FocusState private var focusedAction: Action?
     @FocusState private var focusedAttachment: UUID?
     @AccessibilityFocusState private var voiceOverAction: Action?
     @AccessibilityFocusState private var voiceOverAttachment: UUID?
 
-    private enum Action: Hashable { case addDetails, addNotes, addChild, attachment, reminder, due, recurrence, delete, completionDate }
+    private enum Action: Hashable { case addDetails, addNotes, addChild, attachment, reminder, due, recurrence, delete, completionDate, tags, star }
+    private enum TagPickerAnchor: Hashable { case tag(UUID), footer }
     private enum DateField: String, Identifiable {
         case reminder, due
         var id: Self { self }
@@ -1030,10 +1057,15 @@ struct TaskCard: View, Equatable {
     private var showActions: Bool {
         showsDetails && taskHoverEnabled && (passiveHover || taskFocused || dateEditor != nil || importingFiles)
     }
+    private var mountsFooter: Bool {
+        // Keep presenters and assistive actions alive when the pointer leaves the card.
+        showsDetails && (passiveHover || taskFocused || editingSessionActive || cardEditing.editingRepeat
+            || dateEditor != nil || importingFiles || confirmDelete || accessibilityEnabled || voiceOverEnabled || switchControlEnabled)
+    }
     private var showsDetails: Bool {
         isDraft || editingSessionActive || cardEditing.editingRepeat || dateEditor != nil || importingFiles || (cardEditing.expandedOverride ?? (detailsMode == .expanded))
     }
-    private var taskFocused: Bool { cardFocused || textEditingFocused || focusedAction != nil || voiceOverAction != nil || focusedAttachment != nil || voiceOverAttachment != nil }
+    private var taskFocused: Bool { cardFocused || textEditingFocused || focusedAction != nil || voiceOverAction != nil || focusedAttachment != nil || voiceOverAttachment != nil || tagPickerAnchor != nil }
     private var hasTaskChanges: Bool {
         cardEditing.textHasChanges || cardEditing.editingBaseline.map { task.hasEditableChanges(comparedTo: $0) } == true
     }
@@ -1049,6 +1081,7 @@ struct TaskCard: View, Equatable {
 
     init(store: WorkStore, task: WorkTask, project: Project?, isHistory: Bool, isNavigationTarget: Bool = false, initiallyExpanded: Bool = false, languageIdentifier: String = AppLocalization.languageIdentifier, timeFormat: AppTimeFormat = .system, draft: TaskDraftStorage? = nil, editingState: TaskCardEditingState? = nil, onCreated: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}, onInitialExpansionConsumed: @escaping () -> Void = {}) {
         self.store = store; self.task = task; self.project = project; self.isHistory = isHistory; self.draft = draft
+        self.tags = store.data.tags
         self.isNavigationTarget = isNavigationTarget; self.languageIdentifier = languageIdentifier; self.timeFormat = timeFormat
         self.initiallyExpanded = initiallyExpanded
         self.onCreated = onCreated; self.onCancel = onCancel
@@ -1059,7 +1092,7 @@ struct TaskCard: View, Equatable {
     }
 
     static func == (lhs: TaskCard, rhs: TaskCard) -> Bool {
-        lhs.store === rhs.store && lhs.draft === rhs.draft && lhs.cardEditing === rhs.cardEditing && lhs.task == rhs.task && lhs.project == rhs.project
+        lhs.store === rhs.store && lhs.draft === rhs.draft && lhs.cardEditing === rhs.cardEditing && lhs.task == rhs.task && lhs.project == rhs.project && lhs.tags == rhs.tags
             && lhs.isHistory == rhs.isHistory && lhs.draftID == rhs.draftID
             && lhs.isNavigationTarget == rhs.isNavigationTarget && lhs.languageIdentifier == rhs.languageIdentifier
             && lhs.initiallyExpanded == rhs.initiallyExpanded
@@ -1133,6 +1166,7 @@ struct TaskCard: View, Equatable {
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxHeight: fillsGridRow ? .infinity : nil, alignment: .top)
             .background {
                 RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor))
                     .onTapGesture { if !showsDetails { animateLayout { cardEditing.expandedOverride = true } } }
@@ -1159,14 +1193,14 @@ struct TaskCard: View, Equatable {
             .opacity(taskDragState.taskID == task.id ? 0.48 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: taskDragState.taskID == task.id)
             .overlay(alignment: .bottom) {
-                if showsDetails {
+                if mountsFooter {
                     footer.fixedSize(horizontal: false, vertical: true)
                         .frame(height: 0, alignment: .center)
                 }
             }
             Color.clear
                 // Reserve the footer's overhang before hover or focus reveals its controls.
-                .frame(height: showsDetails ? 20 : 4)
+                .frame(height: showsDetails || fillsGridRow ? 20 : 4)
                 .allowsHitTesting(false)
         }
         .background {
@@ -1226,6 +1260,9 @@ struct TaskCard: View, Equatable {
         .onChange(of: task.subtasks.map(\.id), initial: true) { _, _ in
             cardEditing.discardMissingStepFields(existingIDs: Set(latestTask.subtasks.map(\.id)))
         }
+        .onChange(of: task.tagIDs) { _, ids in
+            if case .tag(let id) = tagPickerAnchor, !ids.contains(id) { tagPickerAnchor = nil }
+        }
         .confirmationDialog(L("删除这项任务？"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button(L("删除任务"), role: .destructive, action: deleteTask)
             Button(L("取消"), role: .cancel) {}
@@ -1244,6 +1281,9 @@ struct TaskCard: View, Equatable {
             }
         }
         .contextMenu {
+            Button(task.isStarred ? L("取消星标") : L("设为星标"), systemImage: task.isStarred ? "star.slash" : "star") { toggleStar() }
+            Menu(L("标签"), systemImage: "tag") { tagMenuChoices }
+            Divider()
             Button(L("修改计划时间"), action: togglePlanning).help(L("在卡片内选择本周、下周，或打开日历选择具体时间"))
             Button(L("添加本地附件")) { importingFiles = true }.help(L("选择本地文件并复制到任务中"))
             Button(L("提醒日期")) { openDate(.reminder) }.help(L("添加或修改提醒日期"))
@@ -1255,7 +1295,7 @@ struct TaskCard: View, Equatable {
             Divider()
             Button(L("删除任务"), role: .destructive, action: requestDelete).help(L("删除任务，可通过编辑菜单撤销"))
         }
-        .environment(\.taskHoverEnabled, taskHoverEnabled)
+        .environment(\.taskHoverEnabled, taskHoverEnabled && !scrollActivity.scrolling)
         .environment(\.taskCardEditingState, cardEditing)
     }
 
@@ -1290,6 +1330,18 @@ struct TaskCard: View, Equatable {
                         .help(L("截止日期已过：\(dayText(due))"))
                 }
             }
+            HoverGlassButton(size: 28, action: toggleStar) {
+                Image(systemName: task.isStarred ? "star.fill" : "star")
+                    .appFont(.system(size: 15, weight: .medium))
+                    .foregroundStyle(task.isStarred ? Color.orange : Color.secondary)
+            }
+            .opacity(task.isStarred || isDraft || passiveHover || taskFocused ? 1 : 0)
+            .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: passiveHover)
+            .help(task.isStarred ? L("取消星标") : L("设为星标，优先显示在任务列表顶部"))
+            .accessibilityLabel(task.isStarred ? L("取消星标") : L("设为星标"))
+            .accessibilityIdentifier("task.star.\(task.id)")
+            .focused($focusedAction, equals: .star).taskAccessibilityFocused($voiceOverAction, equals: .star)
+            if !task.tagIDs.isEmpty { taskTags.padding(.leading, 4).padding(.trailing, 6) }
             if !isDraft {
                 Image(systemName: "line.3.horizontal").appFont(.caption)
                     .foregroundStyle(.secondary).frame(width: 18, height: 24)
@@ -1563,51 +1615,134 @@ struct TaskCard: View, Equatable {
 
     private var footerActions: some View {
         HStack(spacing: 4) {
+            Button { tagPickerAnchor = .footer } label: { Label(L("标签"), systemImage: "tag") }
+                .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small)
+                .help(L("添加或移除任务标签；可同时选择多个标签"))
+                .accessibilityLabel(L("任务标签"))
+                .focused($focusedAction, equals: .tags).taskAccessibilityFocused($voiceOverAction, equals: .tags)
+                .popover(isPresented: tagPickerPresented(.footer), arrowEdge: .bottom) { tagPicker }
             if task.details.isEmpty && !cardEditing.detailsEditing {
                 Button { animateLayout { cardEditing.focusDetailsOnAppear = true; cardEditing.detailsEditing = true } } label: { Label(L("任务明细"), systemImage: "text.alignleft") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small)
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small)
                     .help(L("添加任务明细并开始编辑")).accessibilityLabel(L("添加任务明细"))
                     .focused($focusedAction, equals: .addDetails).taskAccessibilityFocused($voiceOverAction, equals: .addDetails)
             }
             if task.notes.isEmpty && !cardEditing.notesEditing {
                 Button { animateLayout { cardEditing.focusNotesOnAppear = true; cardEditing.notesEditing = true } } label: { Label(L("备注"), systemImage: "note.text") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small)
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small)
                     .help(L("添加备注并开始编辑")).accessibilityLabel(L("添加备注"))
                     .focused($focusedAction, equals: .addNotes).taskAccessibilityFocused($voiceOverAction, equals: .addNotes)
             }
             if task.subtasks.isEmpty && !cardEditing.addingChild {
                 Button(action: beginAddingChild) { Label(L("步骤"), systemImage: "checklist") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small)
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small)
                     .help(L("添加步骤并开始编辑")).accessibilityLabel(L("添加步骤"))
                     .focused($focusedAction, equals: .addChild).taskAccessibilityFocused($voiceOverAction, equals: .addChild)
             }
             if !hasAttachments {
                 Button { importingFiles = true } label: { Label(L("附件"), systemImage: "paperclip") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("添加本地附件，也可以直接拖入文件")).accessibilityLabel(L("添加附件"))
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small).help(L("添加本地附件，也可以直接拖入文件")).accessibilityLabel(L("添加附件"))
                     .focused($focusedAction, equals: .attachment).taskAccessibilityFocused($voiceOverAction, equals: .attachment)
             }
             if task.reminderAt == nil {
                 Button { openDate(.reminder) } label: { Label(L("提醒日期"), systemImage: "bell.badge") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("添加提醒日期与时间"))
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small).help(L("添加提醒日期与时间"))
+                    .accessibilityLabel(L("提醒日期"))
                     .focused($focusedAction, equals: .reminder).taskAccessibilityFocused($voiceOverAction, equals: .reminder)
                     .popover(isPresented: datePresented(.reminder), attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) { datePicker(.reminder) }
             }
             if task.dueAt == nil {
                 Button { openDate(.due) } label: { Label(L("截止日期"), systemImage: "calendar.badge.plus") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("添加截止日期"))
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small).help(L("添加截止日期"))
+                    .accessibilityLabel(L("截止日期"))
                     .focused($focusedAction, equals: .due).taskAccessibilityFocused($voiceOverAction, equals: .due)
                     .popover(isPresented: datePresented(.due), attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) { datePicker(.due) }
             }
             if task.repeatRule == nil {
                 Button(action: openRepeat) { Label(L("循环"), systemImage: "repeat") }
-                    .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(L("选择常用循环周期或自定义周期"))
+                    .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small).help(L("选择常用循环周期或自定义周期"))
+                    .accessibilityLabel(L("循环"))
                     .focused($focusedAction, equals: .recurrence).taskAccessibilityFocused($voiceOverAction, equals: .recurrence)
             }
             Button(role: .destructive, action: requestDelete) { Image(systemName: "trash") }
-                .buttonStyle(FooterActionButtonStyle()).controlSize(.small).help(draft?.task?.id == task.id ? L("取消新增任务") : L("删除任务，确认后可撤销（⌘Z）")).accessibilityLabel(draft?.task?.id == task.id ? L("取消新增任务") : L("删除任务"))
+                .buttonStyle(FooterActionButtonStyle(visible: showActions)).controlSize(.small).help(draft?.task?.id == task.id ? L("取消新增任务") : L("删除任务，确认后可撤销（⌘Z）")).accessibilityLabel(draft?.task?.id == task.id ? L("取消新增任务") : L("删除任务"))
                 .focused($focusedAction, equals: .delete).taskAccessibilityFocused($voiceOverAction, equals: .delete)
         }
         .lineLimit(1)
+    }
+
+    private var taskTags: some View {
+        let selected = tags.filter { task.tagIDs.contains($0.id) }
+        return TaskFlowLayout(spacing: 2 * textScale, rowSpacing: 2 * textScale) {
+            ForEach(selected) { tag in
+                TaskTagIconButton(tag: tag, isPickerPresented: tagPickerAnchor != nil) { tagPickerAnchor = .tag(tag.id) }
+                .popover(isPresented: tagPickerPresented(.tag(tag.id)), arrowEdge: .bottom) { tagPicker }
+            }
+        }
+        .frame(width: (min(max(0, CGFloat(selected.count) * 24 - 2), 70) * textScale).rounded(.up))
+    }
+
+    private func tagPickerPresented(_ anchor: TagPickerAnchor) -> Binding<Bool> {
+        Binding(get: { tagPickerAnchor == anchor }, set: { if !$0 && tagPickerAnchor == anchor { tagPickerAnchor = nil } })
+    }
+
+    private var tagPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(L("任务标签"), systemImage: "tag").appFont(.headline)
+            if tags.isEmpty { Text(L("请先在左侧创建标签")).appFont(.callout).foregroundStyle(.secondary) }
+            else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(tags) { tag in
+                            Button { toggleTag(tag.id) } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "tag.fill")
+                                    Text(tag.name).lineLimit(1).truncationMode(.tail)
+                                    Spacer(minLength: 6)
+                                    Image(systemName: task.tagIDs.contains(tag.id) ? "checkmark.circle.fill" : "circle")
+                                }
+                                .appFont(.callout).foregroundStyle(Color(hex: tag.colorHex))
+                                .padding(8).contentShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(HoverHighlightButtonStyle())
+                            .accessibilityLabel(L("标签：\(tag.name)"))
+                            .accessibilityAddTraits(task.tagIDs.contains(tag.id) ? .isSelected : [])
+                            .help(tag.name)
+                        }
+                    }
+                }.frame(height: min(CGFloat(tags.count) * 36, 260) * textScale)
+            }
+        }
+        .padding(16).frame(width: 280 * textScale)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: task.tagIDs)
+    }
+
+    @ViewBuilder private var tagMenuChoices: some View {
+        if tags.isEmpty { Text(L("请先在左侧创建标签")) }
+        ForEach(tags) { tag in
+            Toggle(tag.name, isOn: Binding(get: { task.tagIDs.contains(tag.id) }, set: { selected in
+                if latestTask.tagIDs.contains(tag.id) != selected { toggleTag(tag.id) }
+            }))
+        }
+    }
+
+    private func toggleTag(_ id: UUID) {
+        guard flushEdits() else { return }
+        do {
+            try updateTask(beginEditing: false) { task in
+                if task.tagIDs.contains(id) { task.tagIDs.removeAll { $0 == id } }
+                else { task.tagIDs.append(id) }
+            }
+            error = nil
+        } catch { self.error = localizedError(error) }
+    }
+
+    private func toggleStar() {
+        guard flushEdits() else { return }
+        do {
+            try updateTask(beginEditing: false) { $0.isStarred.toggle() }
+            error = nil
+        } catch { self.error = localizedError(error) }
     }
 
     private var dateSummary: some View {
@@ -1814,6 +1949,7 @@ struct TaskCard: View, Equatable {
         NotificationCenter.default.post(name: flushTaskEdits, object: request)
         animateLayout {
             cardFocused = false; textEditingFocused = false; focusedAction = nil; focusedAttachment = nil
+            tagPickerAnchor = nil
             hovered = false
         }
     }
@@ -1848,10 +1984,10 @@ struct TaskCard: View, Equatable {
         draft?.update(taskID: task.id, changes)
     }
 
-    private func updateTask(_ changes: (inout WorkTask) -> Void) throws {
+    private func updateTask(beginEditing: Bool = true, _ changes: (inout WorkTask) -> Void) throws {
         guard !cardEditing.discardedDraft else { return }
         try animateLayout {
-            beginTaskEditing()
+            if beginEditing { beginTaskEditing() }
             if isDraft {
                 stageTask(changes)
             } else {

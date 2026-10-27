@@ -103,6 +103,52 @@ final class TaskDisplayLayoutTests: XCTestCase {
         XCTAssertEqual(taskValues(sections.flatMap(\.tasks)), tasks)
     }
 
+    func testGridRowsPreserveOrderAndGroupBoundariesForOneTwoAndThreeColumns() {
+        let firstProject = Project(name: "First project"), secondProject = Project(name: "Second project")
+        let first = (0..<5).map { WorkTask(projectID: firstProject.id, title: "First \($0)") }
+        let second = (0..<2).map { WorkTask(projectID: secondProject.id, title: "Second \($0)") }
+        let completed = (0..<4).map { WorkTask(title: "Completed \($0)", completedAt: Date(timeIntervalSince1970: 1_700_000_000)) }
+        let headings: [[TaskListRow]] = [
+            [.week(.thisWeek, 7, "pending"), .project(firstProject, 5, "pending:thisWeek")],
+            [.project(secondProject, 2, "pending:thisWeek")],
+            [.completed(4), .project(nil, 4, "completed")]
+        ]
+        var source = headings[0]
+        source += first.map { TaskListRow.task($0, firstProject) }
+        source += headings[1] + second.map { TaskListRow.task($0, secondProject) }
+        source += headings[2] + completed.map { TaskListRow.task($0, nil) }
+        let expectedCounts = [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                              [2, 2, 1, 2, 2, 2], [3, 2, 2, 3, 1]]
+        let groupIDs = [Set(first.map(\.id)), Set(second.map(\.id)), Set(completed.map(\.id))]
+
+        for columns in 1...3 {
+            let rows = TaskGridSection.rows(source, columns: columns)
+            XCTAssertEqual(taskValues(rows.flatMap(\.tasks)), first + second + completed)
+            XCTAssertEqual(rows.map { $0.tasks.count }, expectedCounts[columns - 1])
+            XCTAssertEqual(rows.filter { !$0.headings.isEmpty }.map { $0.headings.map(\.id) }, headings.map { $0.map(\.id) },
+                           "Each group's headings belong only to its first visual row.")
+            XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
+            for row in rows {
+                let ids = Set(taskValues(row.tasks).map(\.id))
+                XCTAssertTrue(groupIDs.contains { ids.isSubset(of: $0) }, "A partial row cannot pull tasks from the next group.")
+            }
+        }
+    }
+
+    func testUnheadedGridRowsUseFirstTaskIdentityAndInvalidColumnCountsUseOneColumn() {
+        let tasks = (0..<7).map { WorkTask(title: "Unheaded \($0)") }
+        let source = tasks.map { TaskListRow.task($0, nil) }
+        for columns in [-2, 0, 1, 2, 3] {
+            let rows = TaskGridSection.rows(source, columns: columns)
+            XCTAssertEqual(taskValues(rows.flatMap(\.tasks)), tasks)
+            XCTAssertTrue(rows.allSatisfy { $0.headings.isEmpty && $0.id == $0.tasks.first?.id })
+            XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
+            if columns <= 1 { XCTAssertEqual(rows.map { $0.tasks.count }, Array(repeating: 1, count: tasks.count)) }
+        }
+        XCTAssertTrue(TaskGridSection.rows([], columns: 3).isEmpty)
+        XCTAssertTrue(TaskGridSection.rows([.week(.thisWeek, 0, "empty")], columns: 3).isEmpty)
+    }
+
     func testDroppingOnAllPreservesEveryFieldForOpenAndCompletedTasks() throws {
         let task = taskFixture()
         let reference = date("2024-03-07T12:00:00+08:00")

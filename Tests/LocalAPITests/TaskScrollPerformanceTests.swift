@@ -55,6 +55,8 @@ final class TaskScrollPerformanceTests: XCTestCase {
         let store = try WorkStore(directory: directory)
         let original = store.data
         let services = AppServices(store: store, recoveryMode: true)
+        let diagnostics = ScrollBenchmarkDiagnostics()
+        let accessibilityOverride = environment["WORKLEDGER_SCROLL_ACCESSIBILITY"].flatMap(Bool.init)
 
         _ = NSApplication.shared
         let size = NSSize(width: 1520, height: 1100)
@@ -64,6 +66,10 @@ final class TaskScrollPerformanceTests: XCTestCase {
         let root = RootView(store: store).environmentObject(store).environmentObject(services)
             .environment(\.locale, Locale(identifier: "en"))
             .environment(\.appTextScale, 1).environment(\.colorScheme, .light).appFont(.body)
+            .background(ScrollBenchmarkEnvironmentProbe(diagnostics: diagnostics))
+            .transformEnvironment(\.accessibilityEnabled) { value in
+                if let accessibilityOverride { value = accessibilityOverride }
+            }
         let host = ScrollBenchmarkHostingView(rootView: root)
         window.contentView = host
         window.layoutIfNeeded()
@@ -79,6 +85,7 @@ final class TaskScrollPerformanceTests: XCTestCase {
         var durations: [Double] = []
         var elapsedDurations: [Double] = []
         var cpuDurations: [Double] = []
+        var offsetErrors: [Double] = []
         var furthestOffset = initialOffset
         let totalStart = CACurrentMediaTime()
         let totalCPUStart = Self.threadCPUTime()
@@ -108,9 +115,14 @@ final class TaskScrollPerformanceTests: XCTestCase {
             let cpuMS = (Self.threadCPUTime() - cpuStart) * 1000
             cpuDurations.append(cpuMS)
             let actual = clip.bounds.origin.y
+            var requestedBounds = clip.bounds
+            requestedBounds.origin.y = requested
+            let expected = clip.constrainBoundsRect(requestedBounds).origin.y
+            offsetErrors.append(abs(actual - expected))
             furthestOffset = max(furthestOffset, actual)
             ticks.append([
-                "tick": index, "requestedY": requested, "actualY": actual,
+                "tick": index, "requestedY": requested, "actualY": actual, "expectedY": expected,
+                "documentHeight": scroll.documentView?.bounds.height ?? 0,
                 "layoutFlushMS": measuredMS, "immediateMS": immediateMS, "settleMS": settleMS,
                 "elapsedMS": tickElapsedMS, "threadCPUMS": cpuMS,
                 "hostingLayoutCalls": host.layoutCalls - calls,
@@ -151,6 +163,8 @@ final class TaskScrollPerformanceTests: XCTestCase {
             "initialOffsetY": initialOffset, "furthestOffsetY": furthestOffset,
             "initialVisibleProbes": initialProbes, "finalVisibleProbes": finalProbes,
             "hostingLayoutCalls": host.layoutCalls, "storeUnchanged": store.data == original,
+            "maxScrollOffsetError": offsetErrors.max() ?? 0,
+            "accessibilityEnabled": diagnostics.accessibilityEnabled ?? false,
             "windowVisible": window.isVisible,
             "measurement": "Synchronous programmatic scroll/layout flush plus a fixed 1ms yield; elapsed includes pending graph work. Thread CPU includes main-thread work during that yield, excluding scheduler waits. Hidden fixture, not display-frame timing or FPS."
         ]
@@ -159,6 +173,8 @@ final class TaskScrollPerformanceTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("scroll-layout.json"), options: .atomic)
         print("Scroll layout benchmark: \(original.tasks.count) tasks; median \(report["medianLayoutFlushMS"]!), p95 \(report["p95LayoutFlushMS"]!), max \(report["maxLayoutFlushMS"]!) ms. Not FPS.")
+        XCTAssertLessThanOrEqual(offsetErrors.max() ?? 0, 1, "Scrolling must not jump when variable-height task rows enter the viewport.")
+        XCTAssertNotNil(diagnostics.accessibilityEnabled, "The benchmark must record the actual assistive-access environment.")
     }
 
     private static func threadCPUTime() -> Double {
@@ -194,6 +210,21 @@ final class TaskScrollPerformanceTests: XCTestCase {
                      plannedAt: index.isMultiple(of: 3) ? nil : today, planGranularity: index.isMultiple(of: 3) ? nil : .week)
         }
         return LedgerData(projects: projects, tasks: tasks)
+    }
+}
+
+@MainActor
+private final class ScrollBenchmarkDiagnostics {
+    var accessibilityEnabled: Bool?
+}
+
+private struct ScrollBenchmarkEnvironmentProbe: View {
+    @Environment(\.accessibilityEnabled) private var accessibilityEnabled
+    let diagnostics: ScrollBenchmarkDiagnostics
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onAppear { diagnostics.accessibilityEnabled = accessibilityEnabled }
     }
 }
 

@@ -73,6 +73,32 @@ api '/v1/projects/PROJECT_ID' --request PATCH \
   --data '{"isArchived":true}'
 ```
 
+## Tags
+
+Tags are independent of projects and weekly plans. Each task can keep one project, multiple tags, and a starred flag at the same time.
+
+| Method | Endpoint | Request / result |
+|---|---|---|
+| GET | `/v1/tags` | Array of tags; no query parameters |
+| POST | `/v1/tags` | Required nonempty `name`, optional six-digit `colorHex`; returns tag with `201` |
+| GET | `/v1/tags/TAG_ID` | One tag: `id`, `name`, `colorHex` |
+| PATCH | `/v1/tags/TAG_ID` | At least one of `name` or `colorHex`; returns updated tag |
+| DELETE | `/v1/tags/TAG_ID` | Empty body or `{}`; returns `tag` and `untaggedTaskIDs` |
+
+Deleting a tag removes only that tag's assignments. Tasks, project assignments, other tags, starred flags, and completion history remain. Active editors must save successfully before deletion. Tags do not have an archive state.
+
+```bash
+api '/v1/tags' --request POST \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"Follow up","colorHex":"9462C4"}'
+
+api '/v1/tasks/TASK_ID' --request PATCH \
+  --header 'Content-Type: application/json' \
+  --data '{"tagIDs":["TAG_ID"],"isStarred":true}'
+```
+
+`tagIDs` replaces the entire tag list; read the task before changing the list when preserving existing assignments. Use `[]` to remove all tags. A recurring successor inherits tags and the starred flag.
+
 ## Tasks: create, read, edit, and filter
 
 | Method | Endpoint | Request / result |
@@ -91,13 +117,15 @@ api '/v1/projects/PROJECT_ID' --request PATCH \
 | `title` | Nonempty string; trimmed when saved |
 | `details`, `notes` | Strings; use `""` to clear |
 | `projectID` | Existing active project UUID, or `null` to unassign |
+| `tagIDs` | Array of unique existing tag UUIDs; `[]` clears all tags; `null` is rejected |
+| `isStarred` | Boolean; `false` removes the star; strings, numbers, and `null` are rejected |
 | `plannedAt` | ISO date-time, or `null` to clear the plan and its granularity |
 | `planGranularity` | `"day"`, `"week"`, or `null`; a non-null value requires `plannedAt` |
 | `dueAt` | ISO date-time or `null` |
 | `reminderAt` | ISO date-time or `null` |
 | `repeatRule` | Recurrence object below, or `null` to disable recurrence |
 
-A new task has empty details and notes, no project, no steps or attachments, and no dates or recurrence unless supplied. Setting `plannedAt` without an existing granularity defaults it to `day`. Clearing `dueAt` also clears the recurrence schedule anchor and changes a fixed-schedule rule to completion-based recurrence.
+A new task has empty details and notes, no project or tags, no star, no steps or attachments, and no dates or recurrence unless supplied. Setting `plannedAt` without an existing granularity defaults it to `day`. Clearing `dueAt` also clears the recurrence schedule anchor and changes a fixed-schedule rule to completion-based recurrence.
 
 A recurrence object requires **exactly** these three fields:
 
@@ -127,7 +155,9 @@ Filters combine with AND. With no status filter, both open and completed tasks a
 |---|---|
 | `status` | `all`, `open`, or `completed` |
 | `projectId` | Project UUID, or `none` for unassigned tasks; note lowercase `d`, unlike the JSON field `projectID` |
-| `search` | Case-insensitive substring across title, details, notes, step titles, and attachment names |
+| `tagId` | Existing tag UUID; matches tasks carrying that tag |
+| `starred` | `true` or `false`; filters the task's starred flag |
+| `search` | Case-insensitive substring across title, details, notes, step titles, attachment names, and assigned tag names |
 | `plan` | `thisWeek`, `nextWeek`, `week`, or `unscheduled` |
 | `week` | ISO date-time required only with `plan=week`; selects its containing working week |
 | `overduePlan` | `true` or `false`, using planning-overdue rules |
@@ -265,7 +295,7 @@ api '/v1/tasks/TASK_ID/attachments/ATTACHMENT_ID/content' \
 
 A decoded attachment is limited to 16 MiB. Use the app UI for larger files. No endpoint accepts arbitrary source or destination paths on the Mac.
 
-## Settings and project views
+## Settings and project/tag views
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -274,6 +304,8 @@ A decoded attachment is limited to 16 MiB. Use the app UI for larger files. No e
 | GET | `/v1/settings/status` | Service availability, permissions, and supported system actions |
 | GET | `/v1/projects/PROJECT_ID/view` | Effective display mode and remembered week filter for that project |
 | PATCH | `/v1/projects/PROJECT_ID/view` | Change or reset project-view preferences |
+| GET | `/v1/tags/TAG_ID/view` | Effective display mode and remembered week filter for that tag |
+| PATCH | `/v1/tags/TAG_ID/view` | Change or reset tag-view preferences |
 
 ### Global settings
 
@@ -308,7 +340,7 @@ Status fields include `servicesAvailable`, `apiEnabled`, `launchAtLogin`, `launc
 
 `launchAtLoginStatus` uses `enabled`, `requiresApproval`, `notRegistered`, `notFound`, or `unknown`. `notificationAuthorization` uses `notDetermined`, `denied`, `authorized`, `provisional`, or `unknown`.
 
-### Per-project preferences
+### Per-project and per-tag preferences
 
 View responses contain `id`, `columns`, `details`, `planFilter`, and optional ISO `week`. PATCH accepts:
 
@@ -318,7 +350,7 @@ View responses contain `id`, `columns`, `details`, `planFilter`, and optional IS
 - `week`: required with `planFilter:"week"`, normalized to the configured working-week start; not accepted with other filters.
 - `resetDisplay`: boolean; `true` clears the project's display override and inherits global columns/details. It cannot be combined with `columns` or `details`, but may be combined with a week-filter change.
 
-Changing global defaults leaves explicit project overrides intact. View changes do not rewrite task dates or completion records.
+Tags use the same fields through `/v1/tags/TAG_ID/view`, and keep their preferences independent of projects and other tags. Changing global defaults leaves explicit overrides intact. View changes do not rewrite task dates or completion records.
 
 ```bash
 api '/v1/projects/PROJECT_ID/view' --request PATCH \

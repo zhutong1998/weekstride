@@ -72,6 +72,51 @@ public final class WorkStore: ObservableObject {
         return project
     }
 
+    @discardableResult
+    public func addTag(name: String, colorHex: String = "9462C4") throws -> TaskTag {
+        let tag = TaskTag(name: name.trimmingCharacters(in: .whitespacesAndNewlines), colorHex: colorHex)
+        var next = data; next.tags.append(tag)
+        try commit(next)
+        return tag
+    }
+
+    @discardableResult
+    public func updateTag(id: UUID, name: String? = nil, colorHex: String? = nil) throws -> TaskTag {
+        guard let index = data.tags.firstIndex(where: { $0.id == id }) else { throw LedgerError.notFound("标签不存在。") }
+        var next = data
+        if let name { next.tags[index].name = name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let colorHex { next.tags[index].colorHex = colorHex }
+        if next != data { try commit(next) }
+        return next.tags[index]
+    }
+
+    @discardableResult
+    public func deleteTag(id: UUID) throws -> TaskTag {
+        guard let tag = data.tags.first(where: { $0.id == id }) else { throw LedgerError.notFound("标签不存在。") }
+        var next = data
+        next.tags.removeAll { $0.id == id }
+        for index in next.tasks.indices where next.tasks[index].tagIDs.contains(id) {
+            next.tasks[index].tagIDs.removeAll { $0 == id }
+            next.tasks[index].updatedAt = Date()
+        }
+        try commit(next)
+        return tag
+    }
+
+    public func addTagToTask(id: UUID, tagID: UUID) throws {
+        guard data.tags.contains(where: { $0.id == tagID }) else { throw LedgerError.notFound("标签不存在。") }
+        try updateTask(id: id) { if !$0.tagIDs.contains(tagID) { $0.tagIDs.append(tagID) } }
+    }
+
+    public func removeTagFromTask(id: UUID, tagID: UUID) throws {
+        guard data.tags.contains(where: { $0.id == tagID }) else { throw LedgerError.notFound("标签不存在。") }
+        try updateTask(id: id) { $0.tagIDs.removeAll { $0 == tagID } }
+    }
+
+    public func setTaskStarred(id: UUID, isStarred: Bool) throws {
+        try updateTask(id: id) { $0.isStarred = isStarred }
+    }
+
     public func validateTask(_ task: WorkTask) throws {
         var next = data
         if let index = next.tasks.firstIndex(where: { $0.id == task.id }) { next.tasks[index] = task }
@@ -458,7 +503,7 @@ public final class WorkStore: ObservableObject {
             let seriesID = original.seriesID ?? original.id
             let now = Date()
             let persistedAnchor = rule.basis == .schedule ? ScheduleAnchor(date: basis, occurrence: intervals, rule: rule) : nil
-            let task = WorkTask(projectID: original.projectID, title: original.title, details: original.details, notes: original.notes, subtasks: original.subtasks.map { Subtask(title: $0.title) }, attachments: original.attachments, dueAt: due, reminderAt: reminder, repeatRule: rule, createdAt: now, updatedAt: now, seriesID: seriesID, scheduleAnchor: persistedAnchor, plannedAt: nil, planGranularity: nil)
+            let task = WorkTask(projectID: original.projectID, title: original.title, details: original.details, notes: original.notes, subtasks: original.subtasks.map { Subtask(title: $0.title) }, attachments: original.attachments, dueAt: due, reminderAt: reminder, repeatRule: rule, createdAt: now, updatedAt: now, seriesID: seriesID, scheduleAnchor: persistedAnchor, plannedAt: nil, planGranularity: nil, tagIDs: original.tagIDs, isStarred: original.isStarred)
             next.tasks[index].seriesID = seriesID
             next.tasks[index].nextTaskID = task.id
             next.tasks.append(task)
@@ -559,8 +604,10 @@ public final class WorkStore: ObservableObject {
     private nonisolated static func validate(_ ledger: LedgerData) throws {
         guard ledger.schemaVersion == 1 else { throw LedgerError.invalid("不支持此数据版本，请保留原文件并更新应用。") }
         guard Set(ledger.projects.map(\.id)).count == ledger.projects.count,
+              Set(ledger.tags.map(\.id)).count == ledger.tags.count,
               Set(ledger.tasks.map(\.id)).count == ledger.tasks.count else { throw LedgerError.invalid("数据包含重复 ID。") }
         let projectIDs = Set(ledger.projects.map(\.id))
+        let tagIDs = Set(ledger.tags.map(\.id))
         let taskIDs = Set(ledger.tasks.map(\.id))
         var subtaskIDs: Set<UUID> = []
         var attachmentsByName: [String: Attachment] = [:]
@@ -571,8 +618,15 @@ public final class WorkStore: ObservableObject {
             let color = project.colorHex.hasPrefix("#") ? String(project.colorHex.dropFirst()) : project.colorHex
             guard color.count == 6, color.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { throw LedgerError.invalid("项目颜色必须为六位十六进制颜色。") }
         }
+        for tag in ledger.tags {
+            guard !tag.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("标签名称不能为空。") }
+            let color = tag.colorHex.hasPrefix("#") ? String(tag.colorHex.dropFirst()) : tag.colorHex
+            guard color.count == 6, color.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { throw LedgerError.invalid("标签颜色必须为六位十六进制颜色。") }
+        }
         for task in ledger.tasks {
             if let projectID = task.projectID, !projectIDs.contains(projectID) { throw LedgerError.invalid("任务关联的项目不存在。") }
+            guard Set(task.tagIDs).count == task.tagIDs.count,
+                  task.tagIDs.allSatisfy(tagIDs.contains) else { throw LedgerError.invalid("任务标签重复或不存在。") }
             guard !task.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("任务标题不能为空。") }
             guard [task.createdAt, task.updatedAt].allSatisfy(Self.isValidDate),
                   [task.dueAt, task.reminderAt, task.completedAt, task.plannedAt].compactMap({ $0 }).allSatisfy(Self.isValidDate) else { throw LedgerError.invalid("任务日期无效。") }

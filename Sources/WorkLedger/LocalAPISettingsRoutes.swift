@@ -19,13 +19,16 @@ enum LocalAPISettingsRoutes {
         let path = url.path.split(separator: "/").map(String.init)
         let isSettings = path.starts(with: ["v1", "settings"])
         let isProjectView = path.count == 4 && path[0] == "v1" && path[1] == "projects" && path[3] == "view"
-        guard isSettings || isProjectView else { return nil }
+        let isTagView = path.count == 4 && path[0] == "v1" && path[1] == "tags" && path[3] == "view"
+        guard isSettings || isProjectView || isTagView else { return nil }
         guard url.queryItems?.isEmpty ?? true else { throw invalid("Settings routes do not accept query parameters.") }
 
-        if isProjectView {
-            guard let id = UUID(uuidString: path[2]) else { throw invalid("The project ID must be a UUID.") }
-            guard store.data.projects.contains(where: { $0.id == id }) else { throw LocalAPIHTTPError(status: 404, message: "Project not found.") }
-            return try projectView(request, id: id, defaults: defaults)
+        if isProjectView || isTagView {
+            guard let id = UUID(uuidString: path[2]) else { throw invalid("The group ID must be a UUID.") }
+            let exists = isProjectView ? store.data.projects.contains(where: { $0.id == id }) : store.data.tags.contains(where: { $0.id == id })
+            guard exists else { throw LocalAPIHTTPError(status: 404, message: isProjectView ? "Project not found." : "Tag not found.") }
+            let scope = (isProjectView ? SidebarItem.project(id) : .tag(id)).planFilterPreferenceKey
+            return try groupView(request, id: id, scope: scope, defaults: defaults)
         }
         switch url.path {
         case "/v1/settings":
@@ -94,8 +97,7 @@ enum LocalAPISettingsRoutes {
         if let reminders { services?.setRemindersEnabled(reminders) }
     }
 
-    private static func projectView(_ request: LocalAPIRequest, id: UUID, defaults: UserDefaults) throws -> LocalAPIResponse {
-        let scope = SidebarItem.project(id).planFilterPreferenceKey
+    private static func groupView(_ request: LocalAPIRequest, id: UUID, scope: String, defaults: UserDefaults) throws -> LocalAPIResponse {
         let displays = TaskDisplayPreferences(defaults: defaults)
         let plans = PlanFilterPreferences(defaults: defaults)
         var display = displays.setting(for: scope,

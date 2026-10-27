@@ -4,7 +4,7 @@ import WorkLedgerCore
 enum TaskListPolicy {
     static func isTimeSensitive(_ scope: SidebarItem) -> Bool {
         switch scope {
-        case .upcoming, .overdue, .reminders: return true
+        case .starred, .upcoming, .overdue, .reminders: return true
         default: return false
         }
     }
@@ -22,6 +22,8 @@ enum TaskListPolicy {
             switch scope {
             case .all: return true
             case .thisWeek: return thisWeek(task)
+            case .starred: return task.isStarred
+            case .tag(let id): return task.tagIDs.contains(id)
             case .upcoming: return task.dueAt.map { $0 >= today && $0 < soon } == true
             case .overdue: return task.dueAt.map { $0 < today } == true
             case .reminders: return task.reminderAt.map { $0 <= now } == true
@@ -30,19 +32,20 @@ enum TaskListPolicy {
         }
     }
 
-    static func visibleTasks(_ tasks: [WorkTask], projects: [Project], scope: SidebarItem, filter: TaskPlanFilter,
+    static func visibleTasks(_ tasks: [WorkTask], projects: [Project], tags: [TaskTag] = [], scope: SidebarItem, filter: TaskPlanFilter,
                              search: String, relativeTo today: Date, firstWeekday: Int, calendar: Calendar = .current) -> [WorkTask] {
         let includes = filter.predicate(relativeTo: today, firstWeekday: firstWeekday, calendar: calendar)
         return tasks.filter { task in
-            TaskListStructure.matches(task, projects: projects, search: search)
+            TaskListStructure.matches(task, projects: projects, tags: tags, search: search)
                 && (scope == .completed || isTimeSensitive(scope) || includes(task))
         }.sorted {
             if ($0.completedAt == nil) != ($1.completedAt == nil) { return $0.completedAt == nil }
+            if $0.isStarred != $1.isStarred { return $0.isStarred }
             if scope == .completed || ($0.completedAt != nil && $1.completedAt != nil) {
                 let firstDate = $0.completedAt ?? $0.updatedAt, secondDate = $1.completedAt ?? $1.updatedAt
                 return firstDate == secondDate ? $0.id.uuidString > $1.id.uuidString : firstDate > secondDate
             }
-            if isTimeSensitive(scope) {
+            if scope == .upcoming || scope == .overdue || scope == .reminders {
                 let firstDate = scope == .reminders ? $0.reminderAt : $0.dueAt
                 let secondDate = scope == .reminders ? $1.reminderAt : $1.dueAt
                 if firstDate != secondDate { return (firstDate ?? .distantFuture) < (secondDate ?? .distantFuture) }
@@ -65,6 +68,8 @@ enum TaskListPolicy {
             switch scope {
             case .all: return true
             case .thisWeek: return thisWeek(task)
+            case .starred: return task.isStarred
+            case .tag(let id): return task.tagIDs.contains(id)
             default: return false
             }
         }

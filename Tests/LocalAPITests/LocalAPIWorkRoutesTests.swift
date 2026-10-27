@@ -32,6 +32,129 @@ final class LocalAPIWorkRoutesTests: XCTestCase {
         }
     }
 
+    func testTagLifecycleKeepsProjectsOtherTagsAndStarredState() throws {
+        try withStore { store in
+            let response = try route("POST", "/v1/tags", store: store, body: ["name": " Follow up ", "colorHex": "#ABCDEF"])
+            XCTAssertEqual(response.status, 201)
+            let first = try decode(TaskTag.self, response)
+            let second = try store.addTag(name: "Operations")
+            XCTAssertEqual(first.name, "Follow up")
+            XCTAssertEqual(try decode([TaskTag].self, route("GET", "/v1/tags", store: store)).map(\.id), [first.id, second.id])
+            let renamed = try decode(TaskTag.self, route("PATCH", "/v1/tags/\(first.id)", store: store, body: ["name": "Waiting", "colorHex": "112233"]))
+            XCTAssertEqual(renamed.name, "Waiting")
+            XCTAssertEqual(try decode(TaskTag.self, route("GET", "/v1/tags/\(first.id)", store: store)), renamed)
+            let project = try store.addProject(name: "Website")
+            let created = try route("POST", "/v1/tasks", store: store, body: ["title": "Keep this work", "projectID": project.id.uuidString, "tagIDs": [first.id.uuidString, second.id.uuidString], "isStarred": true])
+            let task = try decode(WorkTask.self, created)
+            XCTAssertEqual(task.tagIDs, [first.id, second.id])
+            XCTAssertTrue(task.isStarred)
+            let deletion = try route("DELETE", "/v1/tags/\(first.id)", store: store)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: deletion.body) as? [String: Any])
+            XCTAssertEqual(object["untaggedTaskIDs"] as? [String], [task.id.uuidString])
+            XCTAssertEqual(store.data.tags.map(\.id), [second.id])
+            XCTAssertEqual(store.data.tasks.count, 1)
+            XCTAssertEqual(store.data.tasks[0].projectID, project.id)
+            XCTAssertEqual(store.data.tasks[0].tagIDs, [second.id])
+            XCTAssertTrue(store.data.tasks[0].isStarred)
+            assertHTTP(404) { _ = try route("GET", "/v1/tags/\(first.id)", store: store) }
+            XCTAssertNil(try LocalAPIWorkRoutes.respond(to: request("GET", "/v1/tags/\(second.id)/view"), store: store, firstWeekday: 5))
+        }
+    }
+
+    func testTaskTagAndStarPatchValidateBeforeFlushingAndRebaseOnCurrentTask() throws {
+        try withStore { store in
+            let tag = try store.addTag(name: "Review")
+            let project = try store.addProject(name: "Website")
+            let task = WorkTask(projectID: project.id, title: "Existing")
+            try store.saveTask(task)
+            let original = store.data
+            let bridge = TaskEditingBoundary.BoundaryView()
+            var flushes = 0
+            bridge.onFlush = { request in
+                guard request.taskID == task.id else { return }
+                flushes += 1
+                do { try store.updateTask(id: task.id) { $0.notes = "Current local edit" } }
+                catch { request.failed = true }
+            }
+            bridge.setEnabled(true); defer { bridge.setEnabled(false) }
+            let invalidBodies: [[String: Any]] = [
+                ["tagIDs": NSNull()], ["tagIDs": tag.id.uuidString], ["tagIDs": [1]],
+                ["tagIDs": ["bad-uuid"]], ["tagIDs": [tag.id.uuidString, tag.id.uuidString]],
+                ["isStarred": 1], ["isStarred": "true"], ["isStarred": NSNull()],
+                ["isStarred": true, "tagIDs": ["bad-uuid"]]
+            ]
+            for body in invalidBodies {
+                assertHTTP(400) { _ = try route("PATCH", "/v1/tasks/\(task.id)", store: store, body: body) }
+            }
+            assertHTTP(404) { _ = try route("PATCH", "/v1/tasks/\(task.id)", store: store, body: ["tagIDs": [UUID().uuidString]]) }
+            XCTAssertEqual(store.data, original)
+            XCTAssertEqual(flushes, 0)
+            let updated = try decode(WorkTask.self, route("PATCH", "/v1/tasks/\(task.id)", store: store, body: ["tagIDs": [tag.id.uuidString], "isStarred": true]))
+            XCTAssertEqual(updated.notes, "Current local edit")
+            XCTAssertEqual(updated.projectID, project.id)
+            XCTAssertEqual(updated.tagIDs, [tag.id])
+            XCTAssertTrue(updated.isStarred)
+            let cleared = try decode(WorkTask.self, route("PATCH", "/v1/tasks/\(task.id)", store: store, body: ["tagIDs": [], "isStarred": false]))
+            XCTAssertTrue(cleared.tagIDs.isEmpty)
+            XCTAssertFalse(cleared.isStarred)
+            XCTAssertEqual(cleared.projectID, project.id)
+            XCTAssertEqual(cleared.notes, updated.notes)
+        }
+    }
+
+    func testTagAndStarTaskFiltersCombineWithoutChangingStoredOrder() throws {
+        try withStore { store in
+            let tag = try store.addTag(name: "Followup")
+            let project = try store.addProject(name: "Operations")
+            let first = WorkTask(projectID: project.id, title: "First", tagIDs: [tag.id], isStarred: true)
+            let second = WorkTask(title: "Second", tagIDs: [tag.id])
+            let third = WorkTask(title: "Third", isStarred: true)
+            for task in [first, second, third] { try store.saveTask(task) }
+            XCTAssertEqual(try decode([WorkTask].self, route("GET", "/v1/tasks?starred=true", store: store)).map(\.id), [first.id, third.id])
+            XCTAssertEqual(try decode([WorkTask].self, route("GET", "/v1/tasks?starred=false&tagId=\(tag.id)", store: store)).map(\.id), [second.id])
+            XCTAssertEqual(try decode([WorkTask].self, route("GET", "/v1/tasks?starred=true&tagId=\(tag.id)&projectId=\(project.id)", store: store)).map(\.id), [first.id])
+            XCTAssertEqual(try decode([WorkTask].self, route("GET", "/v1/tasks?search=followup", store: store)).map(\.id), [first.id, second.id])
+            for query in ["starred=1", "starred=True", "starred=true&starred=false", "tagId=none", "tagId=bad-uuid", "tagId=\(tag.id)&tagId=\(tag.id)"] {
+                assertHTTP(400) { _ = try route("GET", "/v1/tasks?\(query)", store: store) }
+            }
+            assertHTTP(404) { _ = try route("GET", "/v1/tasks?tagId=\(UUID())", store: store) }
+        }
+    }
+
+    func testTaggedStarredTaskDeletionSnapshotRetainsBothFieldsExactly() throws {
+        try withStore { store in
+            let tag = try store.addTag(name: "Retained")
+            let task = WorkTask(title: "Restore tagged work", tagIDs: [tag.id], isStarred: true)
+            try store.saveTask(task)
+            let original = store.data
+            let deletion = try route("DELETE", "/v1/tasks/\(task.id)", store: store)
+            let snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: deletion.body) as? [String: Any])
+            let restored = try decode(WorkTask.self, route("POST", "/v1/tasks/restore", store: store, body: ["snapshot": snapshot]))
+            XCTAssertEqual(restored.tagIDs, [tag.id])
+            XCTAssertTrue(restored.isStarred)
+            XCTAssertEqual(store.data, original)
+        }
+    }
+
+    func testInvalidTagMutationsAndFailedPendingEditsLeaveAssignmentsIntact() throws {
+        try withStore { store in
+            let tag = try store.addTag(name: "Keep")
+            let task = WorkTask(title: "Work", tagIDs: [tag.id])
+            try store.saveTask(task)
+            let original = store.data
+            let invalidBodies: [[String: Any]] = [["name": " "], ["colorHex": "bad"], ["name": NSNull()], ["isArchived": true], [:]]
+            for body in invalidBodies {
+                assertHTTP(400) { _ = try route("PATCH", "/v1/tags/\(tag.id)", store: store, body: body) }
+            }
+            assertHTTP(400) { _ = try route("GET", "/v1/tags?status=all", store: store) }
+            let bridge = TaskEditingBoundary.BoundaryView()
+            bridge.onFinish = { $0.fail(for: task.id) }
+            bridge.setEnabled(true); defer { bridge.setEnabled(false) }
+            assertHTTP(400) { _ = try route("DELETE", "/v1/tags/\(tag.id)", store: store) }
+            XCTAssertEqual(store.data, original)
+        }
+    }
+
     func testProjectLifecycleAndDeletingProjectPreservesTasks() async throws {
         try withStore { store in
             let created = try route("POST", "/v1/projects", store: store, body: ["name": " Website ", "colorHex": "#ABCDEF"])

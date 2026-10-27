@@ -13,15 +13,21 @@ final class TaskNavigationStateTests: XCTestCase {
                 let cards = self.visibleCards(in: fixture.host)
                 guard let target = cards[fixture.firstCurrent.id], let peer = cards[fixture.firstPeer.id] else { return false }
                 return Set(cards.keys) == [fixture.firstCurrent.id, fixture.firstPeer.id]
-                    && target.bounds.width < 750 && peer.bounds.height < 110
+                    && target.bounds.width < 750 && peer.bounds.width < 750 && target.bounds.height > 130
+                    && abs(target.bounds.height - peer.bounds.height) <= 1
             }
 
             let scope = SidebarItem.project(fixture.firstProject.id).planFilterPreferenceKey
             try self.setFilter(.all, for: scope)
             await self.assertEventually(fixture.host, "Changing a tab must preserve the project's display setting.") {
                 let cards = self.visibleCards(in: fixture.host)
+                guard let target = cards[fixture.firstCurrent.id], let peer = cards[fixture.firstPeer.id] else { return false }
                 return Set(cards.keys) == Set(fixture.firstProjectTasks.map(\.id))
-                    && cards[fixture.firstPeer.id].map { $0.bounds.width < 750 && $0.bounds.height < 110 } == true
+                    && target.bounds.width < 750 && peer.bounds.width < 750 && target.bounds.height > 130
+                    && abs(target.bounds.height - peer.bounds.height) <= 1
+                    && fixture.firstProjectTasks.dropFirst(2).allSatisfy { task in
+                        cards[task.id].map { $0.bounds.width < 750 && $0.bounds.height < 110 } == true
+                    }
             }
 
             self.open(fixture.secondCurrent)
@@ -34,8 +40,10 @@ final class TaskNavigationStateTests: XCTestCase {
             self.open(fixture.firstCurrent)
             await self.assertEventually(fixture.host, "Opening a task must use its requested week even if the project last viewed All.") {
                 let cards = self.visibleCards(in: fixture.host)
+                guard let target = cards[fixture.firstCurrent.id], let peer = cards[fixture.firstPeer.id] else { return false }
                 return Set(cards.keys) == [fixture.firstCurrent.id, fixture.firstPeer.id]
-                    && cards[fixture.firstPeer.id].map { $0.bounds.width < 750 && $0.bounds.height < 110 } == true
+                    && target.bounds.width < 750 && peer.bounds.width < 750 && target.bounds.height > 130
+                    && abs(target.bounds.height - peer.bounds.height) <= 1
             }
 
             NotificationCenter.default.post(name: .init("WorkLedger.showAll"), object: nil)
@@ -54,7 +62,7 @@ final class TaskNavigationStateTests: XCTestCase {
             let originalIDs = Set(fixture.original.tasks.map(\.id))
             await self.assertEventually(fixture.host) {
                 !Set(self.visibleCards(in: fixture.host).keys).subtracting(originalIDs).isEmpty
-                    && self.editableFields(in: fixture.host).first != nil
+                    && self.draftTitleField(in: fixture.host) != nil
             }
             let draftID = try XCTUnwrap(Set(self.visibleCards(in: fixture.host).keys).subtracting(originalIDs).first)
             let details = try XCTUnwrap(self.descendants(fixture.host).compactMap { $0 as? NSTextView }
@@ -68,7 +76,7 @@ final class TaskNavigationStateTests: XCTestCase {
             XCTAssertNotNil(self.visibleCards(in: fixture.host)[draftID], "An untitled draft containing details must block project navigation.")
             XCTAssertEqual(fixture.store.data, fixture.original)
 
-            let title = try XCTUnwrap(self.editableFields(in: fixture.host).first)
+            let title = try XCTUnwrap(self.draftTitleField(in: fixture.host))
             XCTAssertTrue(fixture.window.makeFirstResponder(title))
             let editor = try XCTUnwrap(title.currentEditor() as? NSTextView)
             editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
@@ -112,10 +120,10 @@ final class TaskNavigationStateTests: XCTestCase {
 
             self.open(fixture.secondCurrent)
             await self.assertEventually(fixture.host, "Blocked project navigation must reveal the editor that requires correction.") {
-                self.visibleCards(in: fixture.host)[draftID] != nil && !self.editableFields(in: fixture.host).isEmpty
+                self.visibleCards(in: fixture.host)[draftID] != nil && self.draftTitleField(in: fixture.host) != nil
             }
             XCTAssertTrue(fixture.store.data == fixture.original, "A failed navigation cannot commit an untitled draft.")
-            let title = try XCTUnwrap(self.editableFields(in: fixture.host).first)
+            let title = try XCTUnwrap(self.draftTitleField(in: fixture.host))
             XCTAssertTrue(fixture.window.makeFirstResponder(title))
             let editor = try XCTUnwrap(title.currentEditor() as? NSTextView)
             editor.insertText("Recovered navigation draft", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
@@ -243,8 +251,11 @@ final class TaskNavigationStateTests: XCTestCase {
         return result
     }
 
-    private func editableFields(in view: NSView) -> [NSTextField] {
-        descendants(view).compactMap { $0 as? NSTextField }.filter { $0.isEditable && !($0 is NSSearchField) }
+    private func draftTitleField(in view: NSView) -> NSTextField? {
+        descendants(view).compactMap { $0 as? NSTextField }.first {
+            $0.isEditable && $0.placeholderString == L("任务名称") && !$0.isHiddenOrHasHiddenAncestor
+                && !$0.bounds.intersection($0.visibleRect).isEmpty
+        }
     }
 
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }

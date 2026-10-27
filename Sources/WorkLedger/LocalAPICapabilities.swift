@@ -12,6 +12,8 @@ struct LocalAPICapabilities: Encodable {
         "GET /health", "GET /v1", "GET /v1/capabilities",
         "GET,POST /v1/projects", "GET,PATCH,DELETE /v1/projects/{projectID}",
         "GET,PATCH /v1/projects/{projectID}/view",
+        "GET,POST /v1/tags", "GET,PATCH,DELETE /v1/tags/{tagID}",
+        "GET,PATCH /v1/tags/{tagID}/view",
         "GET,POST /v1/tasks", "GET,PATCH,DELETE /v1/tasks/{taskID}",
         "POST /v1/tasks/restore", "POST /v1/tasks/{taskID}/plan",
         "POST /v1/tasks/{taskID}/complete", "POST /v1/tasks/{taskID}/reopen",

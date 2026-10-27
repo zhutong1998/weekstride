@@ -8,6 +8,8 @@ struct TaskListStructure: Equatable {
     struct Task: Equatable {
         let id: UUID
         let projectID: UUID?
+        let tagIDs: [UUID]
+        let isStarred: Bool
         let plannedAt: Date?
         let planGranularity: TaskPlanGranularity?
         let dueAt: Date?
@@ -17,12 +19,14 @@ struct TaskListStructure: Equatable {
 
         init(_ task: WorkTask) {
             id = task.id; projectID = task.projectID
+            tagIDs = task.tagIDs; isStarred = task.isStarred
             plannedAt = task.plannedAt; planGranularity = task.planGranularity
             dueAt = task.dueAt; reminderAt = task.reminderAt; completedAt = task.completedAt; createdAt = task.createdAt
         }
     }
 
     let projects: [Project]
+    let tags: [TaskTag]
     let tasks: [Task]
     let matchingTaskIDs: Set<UUID>?
     let presentationData: LedgerData
@@ -30,14 +34,15 @@ struct TaskListStructure: Equatable {
     init(data: LedgerData, search: String = "") {
         presentationData = data
         projects = data.projects
+        tags = data.tags
         tasks = data.tasks.map(Task.init)
         matchingTaskIDs = search.isEmpty ? nil : Set(data.tasks.filter {
-            Self.matches($0, projects: data.projects, search: search)
+            Self.matches($0, projects: data.projects, tags: data.tags, search: search)
         }.map(\.id))
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.projects == rhs.projects && lhs.tasks == rhs.tasks && lhs.matchingTaskIDs == rhs.matchingTaskIDs
+        lhs.projects == rhs.projects && lhs.tags == rhs.tags && lhs.tasks == rhs.tasks && lhs.matchingTaskIDs == rhs.matchingTaskIDs
     }
 
     func needsCompletionFeedback(comparedTo previous: Self, visibleIDs: Set<UUID>) -> Bool {
@@ -49,10 +54,11 @@ struct TaskListStructure: Equatable {
         previous.tasks.contains { $0.id == id } && !tasks.contains { $0.id == id }
     }
 
-    static func matches(_ task: WorkTask, projects: [Project], search: String) -> Bool {
+    static func matches(_ task: WorkTask, projects: [Project], tags: [TaskTag] = [], search: String) -> Bool {
         guard !search.isEmpty else { return true }
         let projectName = projects.first { $0.id == task.projectID }?.name ?? ""
-        let text = [task.title, task.details, task.notes, projectName] + task.subtasks.map(\.title) + task.attachments.map(\.name)
+        let tagNames = tags.filter { task.tagIDs.contains($0.id) }.map(\.name)
+        let text = [task.title, task.details, task.notes, projectName] + tagNames + task.subtasks.map(\.title) + task.attachments.map(\.name)
         return text.contains { $0.localizedCaseInsensitiveContains(search) }
     }
 
@@ -127,6 +133,7 @@ enum TaskListRow: Identifiable {
     case week(TaskPlanFilter, Int, String)
     case project(Project?, Int, String)
     case completed(Int)
+    case starred(Int, String)
     case task(WorkTask, Project?)
 
     var id: String {
@@ -134,8 +141,57 @@ enum TaskListRow: Identifiable {
         case .week(let filter, _, let section): return "week:\(section):\(filter)"
         case .project(let project, _, let group): return "project:\(group):\(project?.id.uuidString ?? "none")"
         case .completed: return "completed"
+        case .starred(_, let section): return "starred:\(section)"
         case .task(let task, _): return "task:\(task.id)"
         }
+    }
+
+    static func rows(for tasks: [WorkTask], projects: [Project], scope: SidebarItem, filter: TaskPlanFilter,
+                     relativeTo today: Date, firstWeekday: Int, draft: WorkTask? = nil) -> [Self] {
+        func cards(_ tasks: [WorkTask]) -> [Self] {
+            tasks.map { task in .task(task, projects.first { $0.id == task.projectID }) }
+        }
+        func groups(_ tasks: [WorkTask]) -> [(Project?, [WorkTask])] {
+            let byProject = Dictionary(grouping: tasks, by: \.projectID)
+            var result: [(Project?, [WorkTask])] = projects.compactMap { project in
+                guard let values = byProject[project.id], !values.isEmpty else { return nil }
+                return (project, values)
+            }
+            if let unassigned = byProject[nil], !unassigned.isEmpty { result.append((nil, unassigned)) }
+            return result
+        }
+        func grouped(_ tasks: [WorkTask], section: String) -> [Self] {
+            if scope == .completed {
+                return groups(tasks).flatMap { project, tasks in
+                    [.project(project, tasks.count, section)] + cards(tasks)
+                }
+            }
+            return TaskPlanFilter.grouped(for: tasks, relativeTo: today, firstWeekday: firstWeekday).flatMap { week, tasks -> [Self] in
+                var rows: [Self] = filter == .all ? [.week(week, tasks.count, section)] : []
+                for (project, values) in groups(tasks) {
+                    if project.map({ scope == .project($0.id) }) != true {
+                        rows.append(.project(project, values.count, "\(section):\(week)"))
+                    }
+                    rows += cards(values)
+                }
+                return rows
+            }
+        }
+        func prioritized(_ tasks: [WorkTask], section: String) -> [Self] {
+            let stars = tasks.filter(\.isStarred)
+            let pinned: [Self] = stars.isEmpty ? [] : [.starred(stars.count, section)] + cards(stars)
+            return pinned + grouped(tasks.filter { !$0.isStarred }, section: section)
+        }
+        let tasks = tasks.filter { $0.id != draft?.id }
+        let drafts = draft.map { cards([$0]) } ?? []
+        if scope == .completed { return prioritized(tasks, section: "history") }
+        let pending = tasks.filter { $0.completedAt == nil }
+        let completed = tasks.filter { $0.completedAt != nil }
+        if TaskListPolicy.isTimeSensitive(scope) {
+            return drafts + cards(pending) + (completed.isEmpty ? [] : [.completed(completed.count)] + cards(completed))
+        }
+        return drafts + prioritized(pending, section: "pending")
+            + (completed.isEmpty ? [] : [.completed(completed.count)] + prioritized(completed, section: "completed"))
     }
 }
 
@@ -153,10 +209,12 @@ struct RootView: View {
     @AppStorage("appLanguage") private var language: AppLanguage = .system
     @ObservedObject private var dragState = TaskDragState.shared
     @State private var displaySetting = TaskDisplaySetting()
-    @State private var topVisibleTask: UUID?
     @State private var selection: SidebarItem? = .all
     @State private var search = ""
     @State private var showNewProject = false
+    @State private var showNewTag = false
+    @State private var editingTag: TaskTag?
+    @State private var deletingTag: TaskTag?
     @State private var draftStorage = TaskDraftStorage()
     @State private var editingRegistry = TaskEditingRegistry()
     @State private var draftID: UUID?
@@ -223,7 +281,7 @@ struct RootView: View {
         let destination = TaskViewContext(scope: scope ?? .all, filter: filter, search: "")
         let setting = scope == selection ? displaySetting : TaskDisplayPreferences().setting(
             for: (scope ?? .all).planFilterPreferenceKey, defaultColumns: defaultColumns, defaultDetails: defaultDetails)
-        let slide = reduceMotion || listEffect == .none ? nil : TaskListSlide.between(currentContext, destination, projectIDs: listStructure.projects.map(\.id))
+        let slide = reduceMotion || listEffect == .none ? nil : TaskListSlide.between(currentContext, destination, projectIDs: listStructure.projects.map(\.id), tagIDs: listStructure.tags.map(\.id))
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         if slide != nil { listViewport.prepareNavigation() }
@@ -231,7 +289,6 @@ struct RootView: View {
             listSlide = slide
             if setting.details != displaySetting.details { editingRegistry.resetExpansion() }
             displaySetting = setting
-            topVisibleTask = nil
             selection = scope
             planFilter = filter
         }
@@ -270,21 +327,10 @@ struct RootView: View {
     }
 
     private var visibleTasks: [WorkTask] {
-        TaskListPolicy.visibleTasks(tasks(in: selection ?? .all) + completedTasks, projects: listStructure.projects,
+        TaskListPolicy.visibleTasks(tasks(in: selection ?? .all) + completedTasks, projects: listStructure.projects, tags: listStructure.tags,
                                     scope: selection ?? .all, filter: planFilter, search: "",
                                     relativeTo: planningToday, firstWeekday: weekStart)
             .filter { listStructure.matchingTaskIDs?.contains($0.id) ?? true }
-    }
-
-    private func groups(for visibleTasks: [WorkTask]) -> [(Project?, [WorkTask])] {
-        let byProject = Dictionary(grouping: visibleTasks, by: \.projectID)
-        var groups: [(Project?, [WorkTask])] = listStructure.projects.compactMap { project in
-            let tasks = byProject[project.id] ?? []
-            return tasks.isEmpty ? nil : (project, tasks)
-        }
-        let unassigned = visibleTasks.filter { $0.projectID == nil }
-        if !unassigned.isEmpty { groups.append((nil, unassigned)) }
-        return groups
     }
 
     private var visibleDraft: WorkTask? {
@@ -293,39 +339,14 @@ struct RootView: View {
         switch selection ?? .all {
         case .all: return task
         case .project(let id): return task.projectID == id ? task : nil
+        case .tag, .starred: return task
         default: return nil
         }
     }
 
     private func taskRows(for tasks: [WorkTask]) -> [TaskListRow] {
-        let draft = visibleDraft
-        let tasks = tasks.filter { $0.id != draft?.id }
-        let draftRows: [TaskListRow] = draft.map { task in
-            [.task(task, listStructure.projects.first { $0.id == task.projectID })]
-        } ?? []
-        if isTimeSensitive {
-            return tasks.map { task in .task(task, listStructure.projects.first { $0.id == task.projectID }) }
-        }
-        if isHistory {
-            return groups(for: tasks).flatMap { project, tasks in
-                [.project(project, tasks.count, "history")] + tasks.map { .task($0, project) }
-            }
-        }
-        let completed = tasks.filter { $0.completedAt != nil }
-        return draftRows + plannedRows(for: tasks.filter { $0.completedAt == nil }, section: "pending")
-            + (completed.isEmpty ? [] : [.completed(completed.count)] + plannedRows(for: completed, section: "completed"))
-    }
-
-    private func plannedRows(for tasks: [WorkTask], section: String) -> [TaskListRow] {
-        TaskPlanFilter.grouped(for: tasks, relativeTo: planningToday, firstWeekday: weekStart).flatMap { filter, tasks -> [TaskListRow] in
-            var rows: [TaskListRow] = planFilter == .all ? [.week(filter, tasks.count, section)] : []
-            for (project, tasks) in groups(for: tasks) {
-                let isSelectedProject = project.map { selection == .project($0.id) } ?? false
-                if !isSelectedProject { rows.append(.project(project, tasks.count, "\(section):\(filter)")) }
-                rows += tasks.map { .task($0, project) }
-            }
-            return rows
-        }
+        TaskListRow.rows(for: tasks, projects: listStructure.projects, scope: selection ?? .all, filter: planFilter,
+                         relativeTo: planningToday, firstWeekday: weekStart, draft: visibleDraft)
     }
 
     private func thisWeekCount(in tasks: [WorkTask]) -> Int {
@@ -337,11 +358,13 @@ struct RootView: View {
         switch selection ?? .all {
         case .all: return L("全部任务")
         case .thisWeek: return L("本周任务")
+        case .starred: return L("星标任务")
         case .upcoming: return L("即将到期")
         case .overdue: return L("已逾期")
         case .reminders: return L("待处理提醒")
         case .completed: return L("已完成")
         case .project(let id): return listStructure.projects.first { $0.id == id }?.name ?? L("项目")
+        case .tag(let id): return listStructure.tags.first { $0.id == id }?.name ?? L("标签")
         }
     }
 
@@ -353,6 +376,7 @@ struct RootView: View {
         let pageIsTimeSensitive = isTimeSensitive
         let all = tasks(in: .all)
         let upcoming = tasks(in: .upcoming)
+        let starred = tasks(in: .starred)
         let overdue = tasks(in: .overdue)
         let reminders = tasks(in: .reminders)
         let scoped = tasks(in: selection ?? .all)
@@ -364,6 +388,7 @@ struct RootView: View {
                     Section(L("工作台")) {
                         sidebarRow(L("全部任务"), symbol: "square.stack.3d.up", item: .all, count: all.count, weekCount: allWeekCount)
                         sidebarRow(L("本周任务"), symbol: "calendar.badge.clock", item: .thisWeek, weekCount: allWeekCount)
+                        sidebarRow(L("星标任务"), symbol: "star", item: .starred, count: starred.count, weekCount: thisWeekCount(in: starred))
                         sidebarRow(L("即将到期"), symbol: "calendar", item: .upcoming, count: upcoming.count, weekCount: thisWeekCount(in: upcoming))
                         sidebarRow(L("已逾期"), symbol: "exclamationmark.circle", item: .overdue, count: overdue.count, weekCount: thisWeekCount(in: overdue))
                         if !reminders.isEmpty || selection == .reminders {
@@ -420,11 +445,19 @@ struct RootView: View {
                                 .help(L("查看已归档项目，点击项目名称可恢复"))
                         }
                     } header: { Text(L("项目")) }
+                    Section {
+                        ForEach(listStructure.tags) { tag in tagSidebarRow(tag) }
+                        HoverGlassButton(action: { showNewTag = true }) {
+                            Image(systemName: "plus").appFont(.system(size: 16, weight: .medium))
+                        }
+                        .accessibilityLabel(L("新建标签"))
+                        .help(L("新建标签；任务可以同时拥有多个标签"))
+                    } header: { Text(L("标签")) }
                 }.listStyle(.sidebar)
                     .onMoveCommand { direction in
-                        let items: [SidebarItem] = [.all, .thisWeek, .upcoming, .overdue]
+                        let items: [SidebarItem] = [.all, .thisWeek, .starred, .upcoming, .overdue]
                             + (reminders.isEmpty && selection != .reminders ? [] : [.reminders])
-                            + [.completed] + activeProjects.map { .project($0.id) }
+                            + [.completed] + activeProjects.map { .project($0.id) } + listStructure.tags.map { .tag($0.id) }
                         guard let index = items.firstIndex(of: selection ?? .all) else { return }
                         if direction == .up { let target = items[max(0, index - 1)]; selectScope(target); sidebarFocus = selection }
                         if direction == .down { let target = items[min(items.count - 1, index + 1)]; selectScope(target); sidebarFocus = selection }
@@ -455,41 +488,7 @@ struct RootView: View {
                                     if singleColumn {
                                         singleColumnTasks(rows: rows, width: viewport.size.width, history: pageIsHistory, timeSensitive: pageIsTimeSensitive, page: pageID, proxy: proxy)
                                     } else {
-                                        ScrollView {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                if let draft = visibleDraft {
-                                                    taskCard(draft, project: listStructure.projects.first { $0.id == draft.projectID }, history: false, timeSensitive: false)
-                                                        .environment(\.compactTaskPlan, viewport.size.width - 56 < 650 * textSize.scale)
-                                                }
-                                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: TaskColumnMode.spacing, alignment: .top), count: displaySetting.columns.columnCount(availableWidth: viewport.size.width - 56, textScale: textSize.scale)), alignment: .leading, spacing: 4) {
-                                                    ForEach(TaskGridSection.grouped(rows.filter { row in
-                                                        if case .task(let task, _) = row { return task.id != draftID }
-                                                        return true
-                                                    })) { section in
-                                                        Section {
-                                                            ForEach(section.tasks) { row in
-                                                                if case .task(let task, let project) = row {
-                                                                    taskCard(task, project: project, history: pageIsHistory, timeSensitive: pageIsTimeSensitive)
-                                                                        .transition(reduceMotion ? .identity : .opacity)
-                                                                }
-                                                            }
-                                                        } header: {
-                                                            VStack(alignment: .leading, spacing: 4) {
-                                                                ForEach(section.headings) { row in taskHeading(row) }
-                                                            }.frame(maxWidth: .infinity, alignment: .leading)
-                                                        }
-                                                    }
-                                                }
-                                                .environment(\.compactTaskPlan, (viewport.size.width - 56) / CGFloat(displaySetting.columns.columnCount(availableWidth: viewport.size.width - 56, textScale: textSize.scale)) < 650 * textSize.scale)
-                                                .scrollTargetLayout()
-                                            }
-                                            .environment(\.taskDetailsMode, displaySetting.details)
-                                            .padding(.horizontal, 28).padding(.bottom, 28)
-                                            .padding(.top, pageIsHistory ? 14 : 4)
-                                            .id("taskListTop")
-                                        }
-                                        .taskListScrollAnchor()
-                                        .scrollPosition(id: Binding(get: { topVisibleTask }, set: { if pageID == listPageID { topVisibleTask = $0 } }), anchor: .top)
+                                        multiColumnTasks(rows: rows, width: viewport.size.width, history: pageIsHistory, timeSensitive: pageIsTimeSensitive, page: pageID, proxy: proxy)
                                     }
                                 }
                                 .modifier(TaskListScrollActivity())
@@ -506,10 +505,9 @@ struct RootView: View {
                                         withAnimation(reduceMotion || !request.animatedScroll ? nil : .easeInOut(duration: 0.22)) {
                                             proxy.scrollTo("task:\(request.taskID)", anchor: draftID == request.taskID ? .top : .center)
                                         }
-                                    } else if draftID == request.taskID { proxy.scrollTo("taskListTop", anchor: .top) }
-                                    else {
+                                    } else if let row = gridRows(rows, width: viewport.size.width).first(where: { $0.tasks.contains { $0.id == "task:\(request.taskID)" } }) {
                                         withAnimation(reduceMotion || !request.animatedScroll ? nil : .easeInOut(duration: 0.22)) {
-                                            proxy.scrollTo(request.taskID, anchor: .center)
+                                            proxy.scrollTo(row.id, anchor: draftID == request.taskID ? .top : .center)
                                         }
                                     }
                                 }
@@ -546,6 +544,12 @@ struct RootView: View {
             if filter != planFilter { setListLocation(selection, filter: filter) }
         }
         .sheet(isPresented: $showNewProject) { ProjectEditor() }
+        .sheet(isPresented: $showNewTag) { TagEditor() }
+        .sheet(item: $editingTag) { TagEditor(tag: $0) }
+        .confirmationDialog(L("删除这个标签？"), isPresented: Binding(get: { deletingTag != nil }, set: { if !$0 { deletingTag = nil } }), titleVisibility: .visible) {
+            Button(L("删除标签"), role: .destructive) { deleteSelectedTag() }
+            Button(L("取消"), role: .cancel) { deletingTag = nil }
+        } message: { Text(L("只移除标签，任务和所属项目会保留。")) }
         .onReceive(store.$data) { data in
             receiveListStructure(TaskListStructure(data: data, search: search))
         }
@@ -651,14 +655,14 @@ struct RootView: View {
             // Measure both controls together to keep native toolbar sizing stable.
             ToolbarItem(id: "taskScope", placement: .navigation) {
                 HStack(spacing: 4) {
-                    ScopeMenu(title: title, count: count, weekCount: weekCount, selection: scopeSelection, projects: listStructure.projects, hasPendingReminders: !tasks(in: .reminders).isEmpty)
+                    ScopeMenu(title: title, count: count, weekCount: weekCount, selection: scopeSelection, projects: listStructure.projects, tags: listStructure.tags, hasPendingReminders: !tasks(in: .reminders).isEmpty)
                     addTaskButton
                 }.accessibilityElement(children: .contain)
             }.sharedBackgroundVisibility(.hidden)
             ToolbarSpacer(.flexible, placement: .navigation)
         } else {
             ToolbarItem(placement: .navigation) {
-                ScopeMenu(title: title, count: count, weekCount: weekCount, selection: scopeSelection, projects: listStructure.projects, hasPendingReminders: !tasks(in: .reminders).isEmpty)
+                ScopeMenu(title: title, count: count, weekCount: weekCount, selection: scopeSelection, projects: listStructure.projects, tags: listStructure.tags, hasPendingReminders: !tasks(in: .reminders).isEmpty)
             }
             ToolbarItem(placement: .navigation) { addTaskButton }
         }
@@ -707,9 +711,16 @@ struct RootView: View {
             case .week(let date): plannedAt = date
             case .unscheduled: plannedAt = nil
             }
-            draftTask = WorkTask(projectID: selectedProjectID, title: "", plannedAt: plannedAt, planGranularity: plannedAt == nil ? nil : .week)
+            let tagIDs: [UUID]
+            if case .tag(let id) = selection { tagIDs = [id] } else { tagIDs = [] }
+            draftTask = WorkTask(projectID: selectedProjectID, title: "", plannedAt: plannedAt, planGranularity: plannedAt == nil ? nil : .week,
+                                 tagIDs: tagIDs, isStarred: selection == .starred)
         }
-        setListLocation(draftTask?.projectID.map(SidebarItem.project) ?? .all, filter: planFilter)
+        let destination: SidebarItem
+        if case .tag(let id) = selection { destination = .tag(id) }
+        else if selection == .starred { destination = .starred }
+        else { destination = draftTask?.projectID.map(SidebarItem.project) ?? .all }
+        setListLocation(destination, filter: planFilter)
         if let id = draftTask?.id { revealTask(id) }
     }
 
@@ -741,6 +752,54 @@ struct RootView: View {
         if today != planningToday { planningToday = today }
     }
 
+    private func tagSidebarRow(_ tag: TaskTag) -> some View {
+        let tasks = tasks(in: .tag(tag.id))
+        return Button { selectScope(.tag(tag.id)) } label: {
+            SidebarHoverRow(selected: selection == .tag(tag.id), dropColor: Color(hex: tag.colorHex), onTaskDrop: { addTag($0, tagID: tag.id) }) {
+                HStack {
+                    Image(systemName: "tag").foregroundStyle(Color(hex: tag.colorHex)).frame(width: 13)
+                    Text(tag.name).lineLimit(1)
+                    Spacer()
+                    ThisWeekBadge(count: thisWeekCount(in: tasks))
+                    if !tasks.isEmpty { Text("\(tasks.count)").appFont(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                }
+            }
+        }
+        .buttonStyle(.plain).listRowBackground(Color.clear)
+        .accessibilityIdentifier("scope.\(SidebarItem.tag(tag.id).planFilterPreferenceKey)")
+        .focused($sidebarFocus, equals: .tag(tag.id))
+        .accessibilityAddTraits(selection == .tag(tag.id) ? .isSelected : [])
+        .help(L("查看标签任务；拖入任务以添加标签，保留项目和其他标签"))
+        .contextMenu {
+            Button(L("编辑标签")) { editingTag = tag }
+            Button(L("删除标签"), role: .destructive) { deletingTag = tag }
+        }
+    }
+
+    private func deleteSelectedTag() {
+        guard let tag = deletingTag, finishCurrentEdits() else { return }
+        do {
+            _ = try store.deleteTag(id: tag.id)
+            deletingTag = nil
+            if selection == .tag(tag.id) { selectScope(.all) }
+        } catch { self.error = localizedError(error) }
+    }
+
+    private func addTag(_ items: [TaskDragItem], tagID: UUID) -> Bool {
+        guard items.count == 1, let item = items.first, finishCurrentEdits(),
+              let before = store.data.tasks.first(where: { $0.id == item.taskID }),
+              let tag = store.data.tags.first(where: { $0.id == tagID }) else { return false }
+        guard !before.tagIDs.contains(tagID) else { return true }
+        do {
+            try store.addTagToTask(id: before.id, tagID: tagID)
+            guard let after = store.data.tasks.first(where: { $0.id == before.id }) else { return false }
+            revealTask(after.id, animatedScroll: false)
+            operationNotice = TaskOperationNotice(taskID: after.id, title: after.title, message: L("已添加标签「\(tag.name)」"),
+                                                 symbol: "tag", undo: .tags(before: before, after: after))
+            return true
+        } catch { self.error = localizedError(error); return false }
+    }
+
     private func moveTask(_ items: [TaskDragItem], toProject projectID: UUID?) -> Bool {
         guard items.count == 1, let item = items.first else { return false }
         guard finishCurrentEdits() else { return false }
@@ -760,13 +819,9 @@ struct RootView: View {
         }
     }
 
-    private func taskCard(_ task: WorkTask, project: Project?, history: Bool, timeSensitive: Bool) -> some View {
-        taskCardContent(task, project: project, history: history, timeSensitive: timeSensitive).id(task.id)
-    }
-
     private func taskCardContent(_ task: WorkTask, project: Project?, history: Bool, timeSensitive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if timeSensitive {
+            if timeSensitive || task.isStarred {
                 HStack(spacing: 5) {
                     Circle().fill(project.map { Color(hex: $0.colorHex) } ?? .secondary).frame(width: 6, height: 6)
                         .accessibilityHidden(true)
@@ -827,6 +882,59 @@ struct RootView: View {
         .environment(\.taskDetailsMode, displaySetting.details)
         .environment(\.taskListPreservesEditing, true)
         .environment(\.compactTaskPlan, width - 56 < 650 * textSize.scale)
+        .contentMargins(.top, history ? 14 : 4, for: .scrollContent)
+        .contentMargins(.bottom, 28, for: .scrollContent)
+    }
+
+    private func gridRows(_ rows: [TaskListRow], width: CGFloat) -> [TaskGridSection] {
+        let columns = displaySetting.columns.columnCount(availableWidth: width - 56, textScale: textSize.scale)
+        let saved = rows.filter { $0.id != "task:\(draftID?.uuidString ?? "")" }
+        let drafts = visibleDraft.map { task in
+            [TaskGridSection(headings: [], tasks: [.task(task, listStructure.projects.first { $0.id == task.projectID })])]
+        } ?? []
+        return drafts + TaskGridSection.rows(saved, columns: columns)
+    }
+
+    private func multiColumnTasks(rows: [TaskListRow], width: CGFloat, history: Bool, timeSensitive: Bool, page: TaskListPageID, proxy: ScrollViewProxy) -> some View {
+        let columns = displaySetting.columns.columnCount(availableWidth: width - 56, textScale: textSize.scale)
+        return List(gridRows(rows, width: width)) { row in
+            let isDraft = row.tasks.first?.id == "task:\(draftID?.uuidString ?? "")"
+            let rowColumns = isDraft ? 1 : columns
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(row.headings) { taskHeading($0) }
+                TaskColumnLayout(idealWidth: width - 56) {
+                    ForEach(row.tasks) { item in
+                        if case .task(let task, let project) = item {
+                            taskCardContent(task, project: project, history: history, timeSensitive: timeSensitive)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+                    }
+                    ForEach(0..<max(0, rowColumns - row.tasks.count), id: \.self) { _ in
+                        Color.clear.frame(maxWidth: .infinity).frame(height: 0).accessibilityHidden(true)
+                    }
+                }
+                .environment(\.taskCardFillsGridRow, true)
+                .environment(\.compactTaskPlan, (width - 56) / CGFloat(rowColumns) < 650 * textSize.scale)
+            }
+            .accessibilityElement(children: .contain)
+            .id(row.id)
+            .onAppear {
+                guard let request = taskReveal, row.tasks.contains(where: { $0.id == "task:\(request.taskID)" }), centeredListRevealID != request.id else { return }
+                DispatchQueue.main.async {
+                    guard page == listPageID, taskReveal?.id == request.id, centeredListRevealID != request.id else { return }
+                    centeredListRevealID = request.id
+                    proxy.scrollTo(row.id, anchor: draftID == request.taskID ? .top : .center)
+                }
+            }
+            .padding(.bottom, 4)
+            .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 28))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.taskDetailsMode, displaySetting.details)
+        .environment(\.taskListPreservesEditing, true)
         .contentMargins(.top, history ? 14 : 4, for: .scrollContent)
         .contentMargins(.bottom, 28, for: .scrollContent)
     }
@@ -1155,6 +1263,11 @@ struct RootView: View {
 
     @ViewBuilder private func taskHeading(_ row: TaskListRow) -> some View {
         switch row {
+        case .starred(let count, _):
+            HStack(spacing: 8) {
+                Label(L("星标任务"), systemImage: "star.fill").appFont(.headline).foregroundStyle(.orange)
+                Text("\(count)").appFont(.callout.monospacedDigit()).foregroundStyle(.secondary)
+            }.padding(.top, 8).padding(.bottom, 4)
         case .week(let bucket, let count, _): weekHeading(bucket, count: count)
         case .project(let project, let count, _): projectHeading(project, count: count)
         case .completed(let count):
@@ -1453,20 +1566,26 @@ private struct ScopeMenu: View {
     let weekCount: Int
     @Binding var selection: SidebarItem?
     let projects: [Project]
+    let tags: [TaskTag]
     let hasPendingReminders: Bool
 
     private var workbenchChoices: [(String, SidebarItem)] {
-        var items: [(String, SidebarItem)] = [(L("全部任务"), .all), (L("本周任务"), .thisWeek), (L("即将到期"), .upcoming), (L("已逾期"), .overdue)]
+        var items: [(String, SidebarItem)] = [(L("全部任务"), .all), (L("本周任务"), .thisWeek), (L("星标任务"), .starred), (L("即将到期"), .upcoming), (L("已逾期"), .overdue)]
         if hasPendingReminders || selection == .reminders { items.append((L("待处理提醒"), .reminders)) }
         return items + [(L("已完成"), .completed)]
     }
 
     private var choices: [(String, SidebarItem)] {
-        workbenchChoices
-        + projects.filter { !$0.isArchived || selection == .project($0.id) }.map {
+        workbenchChoices + projectChoices + tagChoices
+    }
+
+    private var projectChoices: [(String, SidebarItem)] {
+        projects.filter { !$0.isArchived || selection == .project($0.id) }.map {
             ($0.name + ($0.isArchived ? L("（已归档）") : ""), .project($0.id))
         }
     }
+
+    private var tagChoices: [(String, SidebarItem)] { tags.map { ($0.name, .tag($0.id)) } }
 
     var body: some View {
         let _ = locale.identifier
@@ -1479,6 +1598,10 @@ private struct ScopeMenu: View {
                     Circle().fill(Color(hex: project.colorHex)).frame(width: 8, height: 8)
                         .accessibilityHidden(true)
                 }
+                if case .tag(let id) = selection, let tag = tags.first(where: { $0.id == id }) {
+                    Image(systemName: "tag").foregroundStyle(Color(hex: tag.colorHex)).accessibilityHidden(true)
+                }
+                if selection == .starred { Image(systemName: "star.fill").foregroundStyle(.orange).accessibilityHidden(true) }
                 Text(title).appFont(.system(size: 14, weight: .semibold)).lineLimit(1)
                 if weekCount > 0 { ThisWeekBadge(count: weekCount) }
                 if count > 0 {
@@ -1511,12 +1634,17 @@ private struct ScopeMenu: View {
                         ForEach(items.prefix(workbenchChoices.count), id: \.1) { name, item in
                             choice(name, item: item)
                         }
-                        if items.count > workbenchChoices.count {
+                        if !projectChoices.isEmpty {
                             Divider().padding(.vertical, 4)
                             Text(L("项目")).appFont(.caption.weight(.medium)).foregroundStyle(.secondary).padding(8)
-                            ForEach(items.dropFirst(workbenchChoices.count), id: \.1) { name, item in
+                            ForEach(projectChoices, id: \.1) { name, item in
                                 choice(name, item: item)
                             }
+                        }
+                        if !tagChoices.isEmpty {
+                            Divider().padding(.vertical, 4)
+                            Text(L("标签")).appFont(.caption.weight(.medium)).foregroundStyle(.secondary).padding(8)
+                            ForEach(tagChoices, id: \.1) { name, item in choice(name, item: item) }
                         }
                     }.padding(8)
                 }
@@ -1562,6 +1690,8 @@ private struct ScopeMenu: View {
         case .project(let id):
             Circle().fill(projects.first(where: { $0.id == id }).map { Color(hex: $0.colorHex) } ?? .secondary)
                 .frame(width: 8, height: 8)
+        case .tag(let id): Image(systemName: "tag").foregroundStyle(tags.first(where: { $0.id == id }).map { Color(hex: $0.colorHex) } ?? .secondary)
+        case .starred: Image(systemName: "star.fill").foregroundStyle(.orange)
         case .all: Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary)
         case .thisWeek: Image(systemName: "calendar.badge.clock").foregroundStyle(.secondary)
         case .upcoming: Image(systemName: "calendar").foregroundStyle(.secondary)
@@ -1634,13 +1764,62 @@ struct HoverHighlightButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(Color.primary.opacity(isEnabled && taskHoverEnabled && hovered ? 0.055 : 0))
-                    .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovered)
+                if isEnabled && taskHoverEnabled && hovered {
+                    RoundedRectangle(cornerRadius: cornerRadius).fill(Color.primary.opacity(0.055)).transition(.opacity)
+                }
             }
+            .animation(reduceMotion || !taskHoverEnabled ? nil : .easeOut(duration: 0.12), value: hovered)
             .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.45)
             .onHover { hovered = isEnabled && taskHoverEnabled && $0 }
             .onChange(of: taskHoverEnabled) { _, enabled in if !enabled { hovered = false } }
+    }
+}
+
+private struct TagEditor: View {
+    @EnvironmentObject private var store: WorkStore
+    @Environment(\.dismiss) private var dismiss
+    let tag: TaskTag?
+    @State private var name: String
+    @State private var color: String
+    @State private var error: String?
+    private let colors = ["168C83", "397CC6", "9866C7", "D98C32", "C85E70", "617181"]
+
+    init(tag: TaskTag? = nil) {
+        self.tag = tag
+        _name = State(initialValue: tag?.name ?? "")
+        _color = State(initialValue: tag?.colorHex ?? "9866C7")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text(tag == nil ? L("新建标签") : L("编辑标签")).appFont(.title2.bold())
+            TextField(L("标签名称"), text: $name).textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("tag.name").help(L("输入标签名称"))
+            HStack(spacing: 14) {
+                Text(L("标签颜色")).foregroundStyle(.secondary)
+                ForEach(colors, id: \.self) { hex in
+                    HoverGlassButton(action: { color = hex }) {
+                        Circle().fill(Color(hex: hex)).frame(width: 24, height: 24)
+                            .overlay { if color == hex { Image(systemName: "checkmark").appFont(.caption.bold()).foregroundStyle(.white) } }
+                    }.accessibilityLabel(L("颜色 \(hex)")).help(L("选择标签颜色"))
+                }
+            }
+            if let error { Text(error).appFont(.caption).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                Button(L("取消")) { dismiss() }.nativeActionButton().keyboardShortcut(.cancelAction)
+                Button(tag == nil ? L("创建") : L("保存")) {
+                    do {
+                        if let tag { _ = try store.updateTag(id: tag.id, name: name, colorHex: color) }
+                        else { _ = try store.addTag(name: name, colorHex: color) }
+                        dismiss()
+                    } catch { self.error = localizedError(error) }
+                }
+                .nativeActionButton(prominent: true).keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("tag.save")
+            }
+        }.padding(26).frame(width: 450)
     }
 }
 
@@ -1685,12 +1864,6 @@ private struct ProjectEditor: View {
 
 extension View {
     @ViewBuilder
-    fileprivate func taskListScrollAnchor() -> some View {
-        if #available(macOS 15.0, *) { defaultScrollAnchor(.top, for: .sizeChanges) }
-        else { defaultScrollAnchor(.top) }
-    }
-
-    @ViewBuilder
     func hideStandardToolbarTitle() -> some View {
         if #available(macOS 15.0, *) { toolbar(removing: .title) }
         else { navigationTitle("") }
@@ -1728,5 +1901,44 @@ extension Color {
     init(hex: String) {
         let value = UInt32(hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) ?? 0x168C83
         self.init(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+    }
+}
+
+struct TaskTagIconButton: View {
+    let tag: TaskTag
+    let isPickerPresented: Bool
+    let action: () -> Void
+    @Environment(\.appTextScale) private var textScale
+    @Environment(\.taskHoverEnabled) private var hoverEnabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "tag.fill")
+                .appFont(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color(hex: tag.colorHex))
+                .frame(width: 22 * textScale, height: 24 * textScale)
+                .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(HoverHighlightButtonStyle(cornerRadius: 5))
+        .accessibilityLabel(L("标签：\(tag.name)"))
+        .background(TaskTagTooltipRegion(text: hoverEnabled && !isPickerPresented ? tag.name : nil))
+    }
+}
+
+private struct TaskTagTooltipRegion: NSViewRepresentable {
+    let text: String?
+
+    func makeNSView(context: Context) -> TooltipView {
+        let view = TooltipView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: TooltipView, context: Context) {
+        if view.toolTip != text { view.toolTip = text }
+    }
+
+    final class TooltipView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

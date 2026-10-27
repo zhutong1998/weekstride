@@ -196,6 +196,35 @@ final class LocalAPISettingsRoutesTests: XCTestCase {
         }
     }
 
+    func testTagViewPreferencesRemainIndependentOfProjectAndOtherTags() throws {
+        try fixture { defaults, store in
+            let tag = try store.addTag(name: "Review"), other = try store.addTag(name: "Waiting")
+            let project = try store.addProject(name: "Project")
+            let path = "/v1/tags/\(tag.id)/view"
+            defaults.set("two", forKey: "taskColumns")
+            let changed = try object(request(path, method: "PATCH", body: #"{"columns":"three","details":"titles","planFilter":"nextWeek"}"#), defaults: defaults, store: store)
+            XCTAssertEqual(changed["id"] as? String, tag.id.uuidString)
+            XCTAssertEqual(changed["columns"] as? String, "three")
+            XCTAssertEqual(changed["planFilter"] as? String, "nextWeek")
+            XCTAssertEqual(PlanFilterPreferences(defaults: defaults).filter(for: SidebarItem.tag(tag.id).planFilterPreferenceKey), .nextWeek)
+            let tagView = try object(request(path), defaults: defaults, store: store)
+            XCTAssertEqual(tagView["details"] as? String, "titles")
+            for otherPath in ["/v1/tags/\(other.id)/view", "/v1/projects/\(project.id)/view"] {
+                let untouched = try object(request(otherPath), defaults: defaults, store: store)
+                XCTAssertEqual(untouched["columns"] as? String, "two")
+                XCTAssertEqual(untouched["planFilter"] as? String, "thisWeek")
+            }
+            let before = defaults.dictionaryRepresentation()
+            reject(request(path, method: "PATCH", body: #"{"columns":"one","planFilter":"week"}"#), defaults: defaults, store: store)
+            XCTAssertEqual(defaults.dictionaryRepresentation() as NSDictionary, before as NSDictionary)
+            let reset = try object(request(path, method: "PATCH", body: #"{"resetDisplay":true}"#), defaults: defaults, store: store)
+            XCTAssertEqual(reset["columns"] as? String, "two")
+            XCTAssertEqual(reset["planFilter"] as? String, "nextWeek")
+            reject(request("/v1/tags/\(UUID())/view"), status: 404, defaults: defaults, store: store)
+            reject(request("/v1/tags/invalid/view"), defaults: defaults, store: store)
+        }
+    }
+
     func testFailedPendingEditsBlockSettingsAndViewUpdates() throws {
         try fixture { defaults, store in
             let project = try store.addProject(name: "Project")
